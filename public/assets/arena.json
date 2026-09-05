@@ -1,0 +1,11 @@
+{
+  "width": 2400, "height": 1350, "floorY": 1220,
+  "playerSpawn": {"x": 390, "y": 1152},
+  "targetSpawn": {"x": 910, "y": 1152},
+  "platforms": [
+    {"x": 110, "y": 960, "width": 300, "height": 42},
+    {"x": 570, "y": 755, "width": 350, "height": 44},
+    {"x": 1170, "y": 955, "width": 330, "height": 44},
+    {"x": 1730, "y": 670, "width": 370, "height": 46}
+  ]
+}

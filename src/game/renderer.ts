@@ -1,0 +1,1239 @@
+import {
+  calculateCharacterPose,
+  type CharacterPose,
+} from './character';
+import { drawDetailedCharacter } from './detailedCharacter';
+import { BOT_APPEARANCE, type DetailedAppearance } from './appearance';
+import { getAimDash, resolveWeaponAim, type AimMode } from './aim';
+import { CAMERA_VIEWPORT, DEFAULT_ZOOM_LEVEL, ZOOM_SCALES, followCamera, getCameraTarget, type ZoomLevel } from './camera';
+import { OUTPOST_PALETTE as NIGHT } from './palette';
+import { CONFIG, getWeaponOrigin } from './simulation';
+import { CHARACTER_SCALE } from './stance';
+import { getReloadProgress } from './reload';
+import { OutpostScenery } from './outpostRenderer';
+import type {
+  GameAssets,
+  GameEvent,
+  Rect,
+  Vec2,
+  WorldState,
+} from './types';
+
+type Particle = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  max: number;
+  size: number;
+  color: string;
+};
+type Tracer = {
+  x: number;
+  y: number;
+  toX: number;
+  toY: number;
+  life: number;
+  hit: boolean;
+};
+type FloatLabel = {
+  x: number;
+  y: number;
+  text: string;
+  life: number;
+  color: string;
+};
+export interface AimReticle {
+  mode: AimMode;
+  pivot: Vec2;
+  start: Vec2;
+  end: Vec2;
+}
+export interface LiveAimInput {
+  pointer: Vec2;
+  previousAngle: number;
+}
+const mix = (a: number, b: number, t: number) => a + (b - a) * t;
+const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
+const seed = (n: number) => {
+  const x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+  return x - Math.floor(x);
+};
+function polygon(
+  ctx: CanvasRenderingContext2D,
+  points: number[],
+  color: string,
+) {
+  ctx.beginPath();
+  ctx.moveTo(points[0], points[1]);
+  for (let i = 2; i < points.length; i += 2)
+    ctx.lineTo(points[i], points[i + 1]);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+function line(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  x2: number,
+  y2: number,
+  color: string,
+  width = 1,
+) {
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x2, y2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.stroke();
+}
+function rounded(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+  color: string,
+) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+/** Canvas-only presentation. Coordinates and effects never feed back into simulation. */
+export class GameRenderer {
+  private ctx: CanvasRenderingContext2D;
+  private width = 1280;
+  private height = 720;
+  private viewportScale = 1;
+  private offsetX = 0;
+  private offsetY = 0;
+  private dpr = 1;
+  private zoomLevel: ZoomLevel = DEFAULT_ZOOM_LEVEL;
+  private zoom = ZOOM_SCALES[DEFAULT_ZOOM_LEVEL];
+  private cameraAnchor: Vec2;
+  public camera: Vec2 = { x: 0, y: 0 };
+  private pointer: Vec2 | null = null;
+  private particles: Particle[] = [];
+  private tracers: Tracer[] = [];
+  private labels: FloatLabel[] = [];
+  private recoil = 0;
+  private hitConfirm = 0;
+  private time = 0;
+  private phase = 0;
+  private lastMoveDirection = 1;
+  private walkAmount = 0;
+  private airborneAmount = 0;
+  private thrustAmount = 0;
+  private reticle: AimReticle | null = null;
+  private renderedAimAngle = 0;
+  private frameMs = 16.7;
+  private frameCount = 0;
+  private initialized = false;
+  private outpost: OutpostScenery | null = null;
+  constructor(
+    private canvas: HTMLCanvasElement,
+    private assets: GameAssets,
+  ) {
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Canvas 2D is unavailable in this browser.');
+    this.ctx = context;
+    if (assets.arena.theme === 'outpost') this.outpost = new OutpostScenery(assets.arena);
+    this.resize();
+    this.cameraAnchor = {
+      x: assets.arena.playerSpawn.x + CONFIG.bodyWidth / 2,
+      y: assets.arena.playerSpawn.y + CONFIG.bodyHeight / 2,
+    };
+    this.camera = getCameraTarget(this.cameraAnchor, assets.arena, this.zoom);
+  }
+  setZoom(level: ZoomLevel): void {
+    if (level === this.zoomLevel) return;
+    this.zoomLevel = level;
+    this.zoom = ZOOM_SCALES[level];
+    // Input can project points before another frame: update both transforms together.
+    this.camera = getCameraTarget(this.cameraAnchor, this.assets.arena, this.zoom);
+  }
+  getCameraDiagnostics() {
+    return {
+      zoomLevel: this.zoomLevel,
+      scale: this.zoom,
+      position: { ...this.camera },
+      viewport: {
+        width: CAMERA_VIEWPORT.width / this.zoom,
+        height: CAMERA_VIEWPORT.height / this.zoom,
+      },
+    };
+  }
+  resize() {
+    const rect = this.canvas.getBoundingClientRect();
+    this.width = Math.max(1, rect.width);
+    this.height = Math.max(1, rect.height);
+    this.dpr = Math.min(window.devicePixelRatio || 1, 2);
+    this.canvas.width = Math.round(this.width * this.dpr);
+    this.canvas.height = Math.round(this.height * this.dpr);
+    this.viewportScale = Math.min(this.width / 1280, this.height / 720);
+    this.offsetX = (this.width - 1280 * this.viewportScale) / 2;
+    this.offsetY = (this.height - 720 * this.viewportScale) / 2;
+  }
+  setPointer(clientX: number, clientY: number) {
+    this.pointer = { x: clientX, y: clientY };
+  }
+  getAimDiagnostics(): AimReticle | null {
+    return this.reticle
+      ? {
+          ...this.reticle,
+          pivot: { ...this.reticle.pivot },
+          start: { ...this.reticle.start },
+          end: { ...this.reticle.end },
+        }
+      : null;
+  }
+  getRenderedAimAngle(): number {
+    return this.renderedAimAngle;
+  }
+  getPointerBounds(): {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+  } {
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      left: rect.left + this.offsetX,
+      top: rect.top + this.offsetY,
+      right: rect.left + this.offsetX + 1280 * this.viewportScale,
+      bottom: rect.top + this.offsetY + 720 * this.viewportScale,
+    };
+  }
+  screenToWorld(clientX: number, clientY: number): Vec2 {
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x:
+        (clientX - rect.left - this.offsetX) / this.viewportScale / this.zoom +
+        this.camera.x,
+      y:
+        (clientY - rect.top - this.offsetY) / this.viewportScale / this.zoom +
+        this.camera.y,
+    };
+  }
+  worldToScreen(x: number, y: number): Vec2 {
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x:
+        (x - this.camera.x) * this.zoom * this.viewportScale +
+        this.offsetX +
+        rect.left,
+      y:
+        (y - this.camera.y) * this.zoom * this.viewportScale +
+        this.offsetY +
+        rect.top,
+    };
+  }
+  destroy() {
+    this.outpost?.destroy();
+    this.particles = [];
+    this.tracers = [];
+    this.labels = [];
+    this.reticle = null;
+  }
+  render(
+    previous: WorldState,
+    current: WorldState,
+    alpha: number,
+    appearance: DetailedAppearance,
+    events: GameEvent[],
+    dt: number,
+    debug = false,
+    reducedMotion = false,
+    aimMode: AimMode = 'radial',
+    liveAim?: LiveAimInput,
+  ) {
+    const ctx = this.ctx;
+    const player = current.player;
+    const arena = this.assets.arena;
+    dt = clamp(dt, 0, 0.06);
+    this.time += dt;
+    this.frameMs = mix(this.frameMs, dt * 1000, 0.04);
+    this.frameCount++;
+    const px = mix(previous.player.x, player.x, alpha);
+    const feetY = mix(previous.player.y + previous.player.height, player.y + player.height, alpha);
+    const height = mix(previous.player.height, player.height, alpha);
+    const py = feetY - height;
+    const crouchAmount = mix(previous.player.crouchAmount, player.crouchAmount, alpha);
+    const displayedPlayer = { ...player, x: px, y: py, height, crouchAmount };
+    this.cameraAnchor = { x: px + player.width / 2, y: feetY - CONFIG.bodyHeight / 2 };
+    this.camera = this.initialized
+      ? followCamera(this.camera, this.cameraAnchor, arena, this.zoom, dt)
+      : getCameraTarget(this.cameraAnchor, arena, this.zoom);
+    const desiredWalk =
+      player.grounded && Math.abs(player.vx) > 8
+        ? clamp(Math.abs(player.vx) / CONFIG.moveSpeed, 0, 1)
+        : 0;
+    if (!this.initialized) {
+      this.initialized = true;
+      this.walkAmount = desiredWalk;
+      this.airborneAmount = player.grounded ? 0 : 1;
+      this.thrustAmount = player.thrusting ? 1 : 0;
+    }
+    // Mouse direction uses this frame's camera and displayed position, even between simulation ticks.
+    const { angle: aimAngle, pivot } = liveAim
+      ? resolveWeaponAim(liveAim.pointer, displayedPlayer,
+          point => this.worldToScreen(point.x, point.y), liveAim.previousAngle, aimMode)
+      : { angle: player.aimAngle, pivot: getWeaponOrigin(displayedPlayer) };
+    this.renderedAimAngle = aimAngle;
+    this.recoil = Math.max(0, this.recoil - dt * 16);
+    this.hitConfirm = Math.max(0, this.hitConfirm - dt);
+    if (player.grounded) this.phase += Math.abs(player.vx) * dt * 0.045;
+    if (player.vx !== 0) this.lastMoveDirection = Math.sign(player.vx);
+    this.walkAmount = mix(this.walkAmount, desiredWalk, 1 - Math.exp(-dt * 14));
+    this.airborneAmount = mix(
+      this.airborneAmount,
+      player.grounded ? 0 : 1,
+      1 - Math.exp(-dt * 16),
+    );
+    this.thrustAmount = mix(
+      this.thrustAmount,
+      player.thrusting ? 1 : 0,
+      1 - Math.exp(-dt * 18),
+    );
+    const pose: CharacterPose = {
+      aimAngle,
+      crouchAmount,
+      locomotion: true,
+      walkPhase: this.phase,
+      moveSpeed: player.vx || this.lastMoveDirection,
+      verticalSpeed: player.vy,
+      walkAmount: this.walkAmount,
+      airborneAmount: this.airborneAmount,
+      thrustAmount: this.thrustAmount,
+      moving: Math.abs(player.vx) > 8,
+      airborne: !player.grounded,
+      thrusting: player.thrusting,
+      recoil: this.recoil,
+      reloadProgress: getReloadProgress(player.weapon.reloadTicks, CONFIG.reloadTicks),
+      time: this.time,
+      reducedMotion,
+    };
+    for (const event of events) this.event(event, reducedMotion);
+    for (const p of this.particles) {
+      p.life -= dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vy += 230 * dt;
+    }
+    this.particles = this.particles.filter((p) => p.life > 0);
+    this.tracers = this.tracers.filter((t) => (t.life -= dt) > 0);
+    this.labels = this.labels.filter((l) => (l.life -= dt) > 0);
+    // Character and exhaust share one pose, including transitions and left-facing mirrors.
+    pose.recoil = this.recoil;
+    const geometry = calculateCharacterPose(pose);
+    if (player.thrusting && !reducedMotion && this.frameCount % 2 === 0) {
+      const facing = Math.cos(aimAngle) >= 0 ? 1 : -1;
+      geometry.nozzles.forEach((nozzle, index) =>
+        this.particle(
+          px + player.width / 2 + nozzle.x * facing * CHARACTER_SCALE,
+          feetY + nozzle.y * CHARACTER_SCALE,
+          player.vx * 0.15 + (seed(this.frameCount + index) - 0.5) * 24,
+          75,
+          0.25,
+          3,
+          '#e2bd82',
+        ),
+      );
+    }
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.fillStyle = NIGHT.letterbox;
+    ctx.fillRect(0, 0, this.width, this.height);
+    ctx.save();
+    ctx.translate(this.offsetX, this.offsetY);
+    ctx.scale(this.viewportScale, this.viewportScale);
+    ctx.beginPath();
+    ctx.rect(0, 0, 1280, 720);
+    ctx.clip();
+    if (this.outpost) this.outpost.background(ctx, this.camera);
+    else this.background();
+    ctx.save();
+    ctx.scale(this.zoom, this.zoom);
+    ctx.translate(-this.camera.x, -this.camera.y);
+    if (this.outpost) this.outpost.draw(ctx, this.camera, { x: 1280 / this.zoom, y: 720 / this.zoom });
+    else {
+      this.environment();
+      for (const platform of arena.platforms) this.platform(platform);
+      this.ground();
+      this.rangeProps(current);
+    }
+    // Contact shadows stay on the ground and disappear naturally as the pilot climbs.
+    const shadowY = this.outpost ? feetY : arena.floorY;
+    const groundDistance = this.outpost && !player.grounded ? 1000 : Math.max(0, shadowY - py - player.height);
+    ctx.fillStyle = `rgba(41,55,34,${Math.max(0.02, 0.18 - groundDistance * 0.0004)})`;
+    ctx.beginPath();
+    ctx.ellipse(
+      px + 18,
+      shadowY + 3,
+      Math.max(7, 22 - groundDistance * 0.025),
+      4,
+      0,
+      0,
+      Math.PI * 2,
+    );
+    ctx.fill();
+    if (current.target.health > 0) {
+      const t = current.target;
+      ctx.fillStyle = '#37463533';
+      ctx.beginPath();
+      ctx.ellipse(
+        t.x + t.width / 2,
+        t.y + t.height + 2,
+        23,
+        5,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
+      drawDetailedCharacter(
+        ctx,
+        t.x + t.width / 2,
+        t.y + t.height,
+        CHARACTER_SCALE,
+        { aimAngle: Math.PI, crouchAmount: 0, target: true, hit: t.hitTicks > 0 },
+        BOT_APPEARANCE,
+        this.assets.images,
+      );
+      this.targetHealth(t.x + t.width / 2, t.y - 30, t.health);
+    } else {
+      const t = current.target;
+      ctx.save();
+      ctx.setLineDash([5, 5]);
+      line(
+        ctx,
+        t.x + t.width / 2,
+        t.y + 16,
+        t.x + t.width / 2,
+        t.y + 58,
+        '#d9c9a1',
+        2,
+      );
+      ctx.restore();
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 10px monospace';
+      ctx.fillStyle = this.outpost ? '#334536' : NIGHT.text;
+      ctx.fillText(
+        `RESET ${(t.respawnTicks / 60).toFixed(1)}s`,
+        t.x + t.width / 2,
+        t.y - 7,
+      );
+    }
+    drawDetailedCharacter(
+      ctx,
+      px + player.width / 2,
+      feetY,
+      CHARACTER_SCALE,
+      pose,
+      appearance,
+      this.assets.images,
+    );
+    this.effects();
+    this.reticle = null;
+    if (aimMode === 'radial') {
+      const dash = getAimDash(pivot, aimAngle);
+      this.reticle = { mode: aimMode, pivot, ...dash };
+      ctx.save();
+      ctx.shadowColor = '#2e4635';
+      ctx.shadowBlur = 2;
+      line(
+        ctx,
+        dash.start.x,
+        dash.start.y,
+        dash.end.x,
+        dash.end.y,
+        this.hitConfirm > 0 ? '#f4d28c' : '#eff0ce',
+        2,
+      );
+      ctx.restore();
+    }
+    if (debug) {
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = '#a92931';
+      ctx.strokeRect(player.x, player.y, player.width, player.height);
+      ctx.strokeRect(
+        current.target.x,
+        current.target.y,
+        current.target.width,
+        current.target.height,
+      );
+      ctx.strokeStyle = '#46789b';
+      for (const p of arena.platforms)
+        ctx.strokeRect(p.x, p.y, p.width, p.height);
+      for (const terrain of arena.terrain ?? []) {
+        ctx.beginPath(); ctx.moveTo(terrain.points[0].x, terrain.points[0].y);
+        for (const p of terrain.points.slice(1)) ctx.lineTo(p.x, p.y);
+        ctx.closePath(); ctx.stroke();
+      }
+      line(
+        ctx,
+        pivot.x,
+        pivot.y,
+        pivot.x + Math.cos(aimAngle) * CONFIG.muzzleLength,
+        pivot.y + Math.sin(aimAngle) * CONFIG.muzzleLength,
+        '#a92931',
+        1.5,
+      );
+    }
+    ctx.restore();
+    if (aimMode === 'pointer') this.crosshair(pivot);
+    // Very subtle night vignette grounds the scene without obscuring play.
+    const edge = ctx.createLinearGradient(0, 0, 0, 720);
+    edge.addColorStop(0, '#040c111a');
+    edge.addColorStop(0.16, '#040c1100');
+    edge.addColorStop(0.86, '#040c1100');
+    edge.addColorStop(1, '#040c1124');
+    ctx.fillStyle = edge;
+    ctx.fillRect(0, 0, 1280, 720);
+    if (debug) {
+      rounded(ctx, 20, 180, 250, 115, 5, '#182c28e8');
+      ctx.fillStyle = '#d8e0bb';
+      ctx.textAlign = 'left';
+      ctx.font = '12px monospace';
+      const rows = [
+        `SIM ${current.tick} · ${(1000 / Math.max(1, this.frameMs)).toFixed(0)} FPS / ${this.frameMs.toFixed(1)} ms`,
+        `POS ${player.x.toFixed(1)}, ${player.y.toFixed(1)}`,
+        `VEL ${player.vx.toFixed(1)}, ${player.vy.toFixed(1)}`,
+        `FUEL ${player.fuel.toFixed(1)}% · ${player.grounded ? 'GROUND' : 'AIR'}`,
+        `FX ${this.particles.length} · COLLISION DEBUG`,
+      ];
+      rows.forEach((row, i) => ctx.fillText(row, 33, 202 + i * 19));
+    }
+    ctx.restore();
+  }
+  private background() {
+    const ctx = this.ctx;
+    const camera = this.camera;
+    const sky = ctx.createLinearGradient(0, 0, 0, 720);
+    sky.addColorStop(0, NIGHT.skyTop);
+    sky.addColorStop(0.45, NIGHT.skyMiddle);
+    sky.addColorStop(1, NIGHT.skyBottom);
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, 1280, 720);
+    const moonX = 940 - camera.x * 0.1;
+    const moonY = 165 - camera.y * 0.04;
+    ctx.fillStyle = NIGHT.moon;
+    ctx.beginPath();
+    ctx.arc(moonX, moonY, 58, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = NIGHT.moonHalo;
+    ctx.lineWidth = 15;
+    ctx.beginPath();
+    ctx.arc(moonX, moonY, 73, 0, Math.PI * 2);
+    ctx.stroke();
+    // Clouds are long soft bands, kept quieter than the solid playable surfaces.
+    ctx.fillStyle = NIGHT.cloud;
+    for (let i = 0; i < 8; i++) {
+      const x = ((i * 227 + 47 - camera.x * 0.12) % 1550) - 130;
+      const y = 90 + seed(i + 9) * 180 - camera.y * 0.04;
+      rounded(
+        ctx,
+        x,
+        y,
+        90 + seed(i) * 130,
+        5 + seed(i + 3) * 8,
+        10,
+        NIGHT.cloud,
+      );
+    }
+    const farShift = camera.x * 0.15;
+    polygon(
+      ctx,
+      [
+        -200 - farShift,
+        470,
+        -80 - farShift,
+        353,
+        80 - farShift,
+        377,
+        212 - farShift,
+        214,
+        355 - farShift,
+        353,
+        472 - farShift,
+        276,
+        643 - farShift,
+        432,
+        790 - farShift,
+        277,
+        923 - farShift,
+        345,
+        1120 - farShift,
+        215,
+        1310 - farShift,
+        357,
+        1550 - farShift,
+        260,
+        1600,
+        720,
+        -200,
+        720,
+      ],
+      NIGHT.farRidge,
+    );
+    polygon(
+      ctx,
+      [
+        212 - farShift,
+        214,
+        252 - farShift,
+        305,
+        355 - farShift,
+        353,
+        291 - farShift,
+        328,
+      ],
+      NIGHT.farFacet,
+    );
+    polygon(
+      ctx,
+      [
+        1120 - farShift,
+        215,
+        1173 - farShift,
+        314,
+        1310 - farShift,
+        357,
+        1224 - farShift,
+        331,
+      ],
+      NIGHT.farFacet,
+    );
+    const middle = camera.x * 0.3;
+    polygon(
+      ctx,
+      [
+        -300 - middle,
+        545,
+        -80 - middle,
+        421,
+        115 - middle,
+        477,
+        302 - middle,
+        354,
+        510 - middle,
+        492,
+        655 - middle,
+        400,
+        847 - middle,
+        488,
+        1030 - middle,
+        358,
+        1245 - middle,
+        508,
+        1440 - middle,
+        421,
+        1810 - middle,
+        532,
+        1800,
+        720,
+        -300,
+        720,
+      ],
+      NIGHT.middleRidge,
+    );
+    polygon(
+      ctx,
+      [
+        302 - middle,
+        354,
+        361 - middle,
+        428,
+        510 - middle,
+        492,
+        422 - middle,
+        477,
+      ],
+      NIGHT.middleFacet,
+    );
+    polygon(
+      ctx,
+      [
+        1030 - middle,
+        358,
+        1080 - middle,
+        414,
+        1245 - middle,
+        508,
+        1150 - middle,
+        479,
+      ],
+      NIGHT.middleFacet,
+    );
+    const horizon = 470 + (660 - camera.y) * 0.14;
+    ctx.fillStyle = NIGHT.haze;
+    ctx.fillRect(0, horizon - 25, 1280, 150);
+    const near = camera.x * 0.55;
+    polygon(
+      ctx,
+      [
+        -300 - near,
+        horizon + 220,
+        -100 - near,
+        horizon + 34,
+        90 - near,
+        horizon + 77,
+        285 - near,
+        horizon + 6,
+        414 - near,
+        horizon + 79,
+        600 - near,
+        horizon + 12,
+        810 - near,
+        horizon + 95,
+        940 - near,
+        horizon + 2,
+        1200 - near,
+        horizon + 63,
+        1450 - near,
+        horizon + 6,
+        1700 - near,
+        horizon + 54,
+        1800,
+        800,
+        -300,
+        800,
+      ],
+      NIGHT.nearRidge,
+    );
+    // Faint radio mast on the opposite ridge.
+    const mastX = 1020 - camera.x * 0.38;
+    const mastY = 420 + (660 - camera.y) * 0.12;
+    line(ctx, mastX, mastY, mastX + 10, mastY - 157, '#6a907b14', 2);
+    line(ctx, mastX + 20, mastY, mastX + 10, mastY - 157, '#6a907b55', 2);
+    line(ctx, mastX + 2, mastY - 15, mastX + 18, mastY - 65, '#6a907b55', 1);
+    line(ctx, mastX + 18, mastY - 15, mastX + 5, mastY - 89, '#6a907b55', 1);
+    line(ctx, mastX - 15, mastY - 117, mastX + 36, mastY - 117, '#6a907b55', 2);
+    line(ctx, mastX + 10, mastY - 147, mastX + 10, mastY - 179, '#85a58d', 1);
+    for (let i = 0; i < 19; i++) {
+      const x = i * 114 - camera.x * 0.49 - 110;
+      const y = horizon + 111 + Math.sin(i * 1.7) * 20;
+      this.pine(x, y, 20 + seed(i + 22) * 45, '#182b2477');
+    }
+    // Fine airborne flecks supply depth without animated visual noise.
+    ctx.fillStyle = '#e9e0bf66';
+    for (let i = 0; i < 25; i++) {
+      const x = seed(i + 120) * 1280;
+      const y = seed(i + 91) * 590;
+      ctx.fillRect(x, y, 1.5, 1.5);
+    }
+  }
+  private pine(x: number, y: number, h: number, color: string) {
+    const ctx = this.ctx;
+    line(ctx, x, y, x, y - h, color, 3);
+    polygon(
+      ctx,
+      [
+        x,
+        y - h,
+        x - h * 0.26,
+        y - h * 0.4,
+        x - h * 0.09,
+        y - h * 0.45,
+        x - h * 0.35,
+        y - h * 0.14,
+        x + h * 0.35,
+        y - h * 0.14,
+        x + h * 0.09,
+        y - h * 0.45,
+        x + h * 0.26,
+        y - h * 0.4,
+      ],
+      color,
+    );
+  }
+  private environment() {
+    const ctx = this.ctx;
+    const floor = this.assets.arena.floorY;
+    // Sparse tall conifers and a distant service fence establish the training outpost.
+    this.pine(42, floor, 246, NIGHT.tree);
+    this.pine(83, floor, 176, NIGHT.treeLight);
+    this.pine(1523, floor, 214, NIGHT.treeLight);
+    this.pine(1600, floor, 288, NIGHT.tree);
+    this.pine(2202, floor, 340, NIGHT.tree);
+    this.pine(2297, floor, 248, NIGHT.treeLight);
+    for (let i = 0; i < 21; i++) {
+      const x = i * 125;
+      line(ctx, x, floor - 18, x, floor - 75, '#586d4566', 3);
+    }
+    line(ctx, 0, floor - 60, 2400, floor - 60, '#78815c66', 2);
+    line(ctx, 0, floor - 31, 2400, floor - 31, '#78815c66', 2);
+    // Rocky retaining columns behind platforms read as scenery, never as solid collision.
+    for (let i = 0; i < this.assets.arena.platforms.length; i++) {
+      const p = this.assets.arena.platforms[i];
+      const bottom = Math.min(floor, p.y + p.height + 230);
+      const sx = p.x + p.width * 0.7;
+      polygon(
+        ctx,
+        [
+          sx - 9,
+          p.y + p.height,
+          sx + 17,
+          p.y + p.height,
+          sx + 21,
+          bottom,
+          sx - 13,
+          bottom,
+        ],
+        '#3c59422b',
+      );
+      line(ctx, sx - 5, p.y + p.height + 10, sx + 8, bottom, '#172c2044', 3);
+    }
+    // Slack cables and hanging field insignia are atmospheric rather than interactive.
+    ctx.strokeStyle = '#58664d66';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(15, 867);
+    ctx.quadraticCurveTo(210, 1015, 465, 890);
+    ctx.stroke();
+    for (let i = 0; i < 6; i++) {
+      const x = 70 + i * 54;
+      const y = 895 + Math.sin(i * 0.43) * 44;
+      polygon(
+        ctx,
+        [x, y, x + 17, y + 2, x + 7, y + 24],
+        i % 2 ? '#c1a06588' : '#75805799',
+      );
+    }
+  }
+  private platform(p: Rect) {
+    const ctx = this.ctx;
+    const x = p.x,
+      y = p.y,
+      w = p.width,
+      h = p.height;
+    // A bright continuous cap and dark underside make every collidable edge unambiguous.
+    ctx.fillStyle = '#050e0944';
+    ctx.fillRect(x + 7, y + h + 5, w - 14, 7);
+    polygon(
+      ctx,
+      [
+        x,
+        y + 8,
+        x + w,
+        y + 8,
+        x + w - 6,
+        y + h - 7,
+        x + w - 31,
+        y + h + 3,
+        x + 24,
+        y + h,
+        x,
+        y + h - 10,
+      ],
+      NIGHT.rockShadow,
+    );
+    polygon(
+      ctx,
+      [
+        x + 5,
+        y + 15,
+        x + w - 4,
+        y + 15,
+        x + w - 13,
+        y + h - 8,
+        x + 23,
+        y + h - 5,
+      ],
+      NIGHT.rock,
+    );
+    polygon(
+      ctx,
+      [x + 21, y + 19, x + 75, y + 14, x + 105, y + h - 3, x + 44, y + h - 1],
+      '#404b36',
+    );
+    polygon(
+      ctx,
+      [
+        x + w - 114,
+        y + 15,
+        x + w - 53,
+        y + 14,
+        x + w - 18,
+        y + h - 9,
+        x + w - 80,
+        y + h - 2,
+      ],
+      NIGHT.rockFacet,
+    );
+    ctx.fillStyle = '#293e2a';
+    ctx.fillRect(x, y, w, 9);
+    ctx.fillStyle = NIGHT.landingEdge;
+    ctx.fillRect(x + 2, y, w - 4, 4);
+    ctx.fillStyle = NIGHT.landingHighlight;
+    ctx.fillRect(x + 6, y, w - 12, 1);
+    ctx.fillStyle = '#a6ad72';
+    ctx.fillRect(x + 10, y + 10, 30, 5);
+    ctx.fillRect(x + w - 41, y + 10, 30, 5);
+    for (let i = 0; i < Math.floor(w / 54); i++) {
+      const xx = x + 28 + i * 54;
+      line(ctx, xx, y + 20, xx + 11, y + 27, '#625f4477', 1);
+      ctx.fillStyle = '#e1c98c55';
+      ctx.fillRect(xx + 13, y + 15, 11, 2);
+    }
+    // Small tufts soften the top while preserving its straight landing surface.
+    for (let i = 0; i < 4; i++) {
+      const gx = x + 50 + (i * (w - 80)) / 4;
+      line(ctx, gx, y, gx - 3, y - 5, '#87955e', 1);
+      line(ctx, gx, y, gx + 4, y - 7, '#9daa72', 1);
+    }
+    ctx.fillStyle = '#c2cb9699';
+    ctx.font = 'bold 9px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(
+      'O7 / ' +
+        String(this.assets.arena.platforms.indexOf(p) + 1).padStart(2, '0'),
+      x + 50,
+      y + 27,
+    );
+  }
+  private ground() {
+    const ctx = this.ctx;
+    const floor = this.assets.arena.floorY;
+    ctx.fillStyle = NIGHT.ground;
+    ctx.fillRect(0, floor, 2400, 300);
+    polygon(
+      ctx,
+      [
+        0,
+        floor + 26,
+        150,
+        floor + 49,
+        390,
+        floor + 21,
+        560,
+        floor + 38,
+        820,
+        floor + 18,
+        1040,
+        floor + 58,
+        1320,
+        floor + 29,
+        1520,
+        floor + 50,
+        1810,
+        floor + 21,
+        2060,
+        floor + 55,
+        2400,
+        floor + 30,
+        2400,
+        floor + 300,
+        0,
+        floor + 300,
+      ],
+      NIGHT.groundShadow,
+    );
+    ctx.fillStyle = '#536642';
+    ctx.fillRect(0, floor, 2400, 11);
+    ctx.fillStyle = NIGHT.landingEdge;
+    ctx.fillRect(0, floor, 2400, 3);
+    ctx.fillStyle = '#4a5a3988';
+    ctx.fillRect(0, floor + 10, 2400, 3);
+    for (let i = 0; i < 140; i++) {
+      const x = seed(i + 51) * 2400,
+        y = floor + 18 + seed(i + 125) * 132,
+        w = 3 + seed(i + 96) * 18;
+      polygon(
+        ctx,
+        [
+          x,
+          y,
+          x + w * 0.4,
+          y - 4,
+          x + w,
+          y - 1,
+          x + w * 0.7,
+          y + 3,
+          x + 2,
+          y + 4,
+        ],
+        i % 3 === 0 ? '#929e6455' : '#111e1255',
+      );
+    }
+    for (let i = 0; i < 85; i++) {
+      const x = i * 29 + seed(i + 4) * 13;
+      line(ctx, x, floor, x - 2, floor - 3 - seed(i + 21) * 5, '#839050', 1.5);
+      line(ctx, x, floor, x + 4, floor - 2 - seed(i + 31) * 7, '#8d9e64', 1);
+    }
+    // The range's painted firing lanes are world-space marks, not UI.
+    ctx.fillStyle = '#dfcd9677';
+    ctx.fillRect(374, floor + 4, 72, 4);
+    ctx.fillRect(878, floor + 4, 96, 4);
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#cec19199';
+    ctx.fillText('FIRING LINE', 410, floor + 30);
+    ctx.fillText('TARGET 01', 929, floor + 30);
+  }
+  private rangeProps(world: WorldState) {
+    const ctx = this.ctx;
+    const floor = this.assets.arena.floorY;
+    // A field manual board and range number establish the opening view.
+    line(ctx, 170, floor, 170, floor - 148, '#687957', 7);
+    line(ctx, 285, floor, 285, floor - 148, '#687957', 7);
+    rounded(ctx, 147, floor - 144, 164, 65, 3, '#172c21');
+    rounded(ctx, 152, floor - 139, 154, 55, 1, '#364b30');
+    const badge = this.assets.images.insignia;
+    if (badge) ctx.drawImage(badge, 185, floor - 216, 47, 52);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#e3d2a1';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText('LIVE-FIRE RANGE', 166, floor - 115);
+    ctx.font = '9px monospace';
+    ctx.fillStyle = '#c6c493';
+    ctx.fillText('KEEP YOUR BOOTS LIGHT.', 166, floor - 97);
+    for (const x of [157, 301])
+      for (const y of [floor - 135, floor - 88]) {
+        ctx.fillStyle = '#b1aa75';
+        ctx.beginPath();
+        ctx.arc(x, y, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    // Hanging target banner sits behind the target, with no false collidable geometry.
+    const tx = world.target.x + world.target.width / 2;
+    line(ctx, tx + 64, floor, tx + 64, floor - 168, '#697854', 4);
+    line(ctx, tx + 23, floor - 165, tx + 67, floor - 165, '#697854', 3);
+    const banner = this.assets.images['range-banner'];
+    if (banner) ctx.drawImage(banner, tx + 25, floor - 161, 37, 44);
+    // Ground pads and a stack of transport cases are decorative.
+    rounded(ctx, tx - 46, floor - 4, 91, 4, 1, '#525f41');
+    ctx.fillStyle = '#d1ad65';
+    ctx.fillRect(tx - 44, floor - 4, 14, 3);
+    ctx.fillRect(tx + 29, floor - 4, 14, 3);
+    this.crate(1458, floor - 37, 53, 37);
+    this.crate(1514, floor - 30, 44, 30);
+    this.crate(1472, floor - 65, 34, 28);
+    // Distant wind sock helps sell the place as an air-combat training ground.
+    line(ctx, 2000, floor, 2000, 800, '#58664b', 5);
+    ctx.save();
+    ctx.translate(2000, 805);
+    ctx.rotate(Math.sin(this.time * 0.8) * 0.035);
+    polygon(ctx, [0, -8, 98, 10, 91, 29, 0, 13], '#d5a15f');
+    polygon(ctx, [27, -3, 48, 1, 48, 21, 27, 17], '#e9d6ac');
+    polygon(ctx, [67, 4, 86, 8, 82, 26, 65, 24], '#e9d6ac');
+    ctx.restore();
+  }
+  private crate(x: number, y: number, w: number, h: number) {
+    const ctx = this.ctx;
+    rounded(ctx, x, y, w, h, 2, '#586746');
+    ctx.strokeStyle = '#303f31';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+    ctx.fillStyle = '#8e9364';
+    ctx.fillRect(x + 3, y + 3, w - 6, 3);
+    ctx.fillStyle = '#404f36';
+    ctx.fillRect(x + 5, y + 8, 5, h - 10);
+    ctx.fillRect(x + w - 10, y + 8, 5, h - 10);
+    ctx.fillStyle = '#b7b180';
+    ctx.fillRect(x + w / 2 - 5, y + h / 2 - 3, 10, 6);
+  }
+  private targetHealth(x: number, y: number, health: number) {
+    const ctx = this.ctx;
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 8px monospace';
+    ctx.fillStyle = this.outpost ? '#334536' : NIGHT.text;
+    ctx.fillText('TRAINING BOT', x, y - 10);
+    rounded(ctx, x - 29, y - 3, 58, 7, 3, '#314c38');
+    rounded(
+      ctx,
+      x - 27,
+      y - 1,
+      (54 * health) / 100,
+      3,
+      1,
+      health > 40 ? '#d8b173' : '#cd8059',
+    );
+    ctx.fillStyle = this.outpost ? '#4a5c42' : NIGHT.mutedText;
+    ctx.font = '8px monospace';
+    ctx.fillText(`${health} / 100`, x, y + 16);
+  }
+  private particle(
+    x: number,
+    y: number,
+    vx: number,
+    vy: number,
+    life: number,
+    size: number,
+    color: string,
+  ) {
+    if (this.particles.length < 180)
+      this.particles.push({ x, y, vx, vy, life, max: life, size, color });
+  }
+  private event(event: GameEvent, reducedMotion: boolean) {
+    const count = reducedMotion ? 2 : 8;
+    if (event.type === 'shot') {
+      this.tracers.push({ ...event, life: 0.075 });
+      this.recoil = 1;
+      for (let i = 0; i < 3; i++)
+        this.particle(
+          event.toX,
+          event.toY,
+          (seed(this.time + i) - 0.5) * 140,
+          -25 - seed(i + this.time) * 95,
+          0.14 + i * 0.04,
+          2,
+          event.hit ? '#dca36a' : '#d9c58a',
+        );
+    }
+    if (event.type === 'hit') {
+      this.hitConfirm = 0.16;
+      this.labels.push({
+        x: event.x,
+        y: event.y - 32,
+        text: `−${event.damage}`,
+        life: 0.65,
+        color: this.outpost ? '#763c27' : '#f7e3b3',
+      });
+      for (let i = 0; i < count; i++)
+        this.particle(
+          event.x,
+          event.y,
+          (seed(this.time + i + 3) - 0.5) * 170,
+          -30 - seed(i + this.time + 8) * 120,
+          0.3 + i * 0.025,
+          2 + (i % 2),
+          '#eac58b',
+        );
+    }
+    if (event.type === 'targetDeath') {
+      this.labels.push({
+        x: event.x,
+        y: event.y - 42,
+        text: 'TARGET DOWN',
+        life: 1.1,
+        color: '#f5e6bd',
+      });
+      for (let i = 0; i < count * 2; i++)
+        this.particle(
+          event.x,
+          event.y,
+          (seed(this.time + i + 21) - 0.5) * 190,
+          -40 - seed(i + this.time + 4) * 160,
+          0.5 + i * 0.018,
+          3 + (i % 4),
+          i % 2 ? '#b79966' : '#657550',
+        );
+    }
+    if (event.type === 'land' || event.type === 'jump')
+      for (let i = 0; i < count; i++)
+        this.particle(
+          event.x,
+          event.y,
+          (seed(i + this.time) - 0.5) * 130,
+          -10 - seed(i + this.time + 12) * 45,
+          0.2 + i * 0.03,
+          3,
+          '#cbbb87',
+        );
+    if (event.type === 'targetRespawn')
+      for (let i = 0; i < count; i++)
+        this.particle(
+          event.x,
+          event.y,
+          (seed(i + this.time) - 0.5) * 70,
+          -seed(i + this.time + 12) * 65,
+          0.5,
+          3,
+          '#d9d3a2',
+        );
+  }
+  private effects() {
+    const ctx = this.ctx;
+    for (const tracer of this.tracers) {
+      ctx.globalAlpha = clamp(tracer.life / 0.075, 0, 1);
+      line(ctx, tracer.x, tracer.y, tracer.toX, tracer.toY, '#e3b96377', 4);
+      line(ctx, tracer.x, tracer.y, tracer.toX, tracer.toY, '#fff0bf', 1.3);
+      ctx.fillStyle = '#fff1bd';
+      ctx.beginPath();
+      ctx.arc(tracer.toX, tracer.toY, 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    for (const p of this.particles) {
+      ctx.globalAlpha = clamp(p.life / p.max, 0, 1) * 0.8;
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    }
+    ctx.globalAlpha = 1;
+    for (const label of this.labels) {
+      ctx.globalAlpha = Math.min(1, label.life * 3);
+      ctx.textAlign = 'center';
+      ctx.font =
+        label.text === 'TARGET DOWN'
+          ? 'bold 11px monospace'
+          : 'bold 15px monospace';
+      ctx.strokeStyle = '#394c38';
+      ctx.lineWidth = 3;
+      ctx.strokeText(label.text, label.x, label.y - (1 - label.life) * 20);
+      ctx.fillStyle = label.color;
+      ctx.fillText(label.text, label.x, label.y - (1 - label.life) * 20);
+    }
+    ctx.globalAlpha = 1;
+  }
+  private crosshair(pivot: Vec2) {
+    if (!this.pointer) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = (this.pointer.x - rect.left - this.offsetX) / this.viewportScale,
+      y = (this.pointer.y - rect.top - this.offsetY) / this.viewportScale;
+    if (x < 0 || x > 1280 || y < 0 || y > 720) return;
+    const point = this.screenToWorld(this.pointer.x, this.pointer.y);
+    this.reticle = { mode: 'pointer', pivot, start: point, end: { ...point } };
+    const ctx = this.ctx;
+    ctx.strokeStyle = this.hitConfirm > 0 ? '#f4d28c' : '#eff0ce';
+    ctx.lineWidth = 2;
+    ctx.shadowColor = '#2e4635';
+    ctx.shadowBlur = 2;
+    for (const sign of [-1, 1]) {
+      line(
+        ctx,
+        x + sign * 6,
+        y,
+        x + sign * 12,
+        y,
+        this.hitConfirm > 0 ? '#f4d28c' : '#eff0ce',
+        2,
+      );
+      line(
+        ctx,
+        x,
+        y + sign * 6,
+        x,
+        y + sign * 12,
+        this.hitConfirm > 0 ? '#f4d28c' : '#eff0ce',
+        2,
+      );
+    }
+    ctx.fillStyle = '#e8efcb';
+    ctx.fillRect(x - 1, y - 1, 2, 2);
+    ctx.shadowBlur = 0;
+    if (this.hitConfirm > 0) {
+      for (const a of [
+        Math.PI * 0.25,
+        Math.PI * 0.75,
+        Math.PI * 1.25,
+        Math.PI * 1.75,
+      ])
+        line(
+          ctx,
+          x + Math.cos(a) * 8,
+          y + Math.sin(a) * 8,
+          x + Math.cos(a) * 14,
+          y + Math.sin(a) * 14,
+          '#eac586',
+          2,
+        );
+    }
+  }
+}
+
+export { GameRenderer as Renderer };

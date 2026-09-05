@@ -1,0 +1,65 @@
+{
+  "note": "Observed idle rendering in headless Chromium without Playwright trace or collision sampling. Not a native GPU or multiplayer capacity benchmark.",
+  "results": [
+    {
+      "density": 1,
+      "zoom": 1,
+      "fps": 60,
+      "frames": 122,
+      "running": true,
+      "tick": 125,
+      "medianFrameMs": 16.699999999999818,
+      "p95FrameMs": 16.799999999999727
+    },
+    {
+      "density": 1,
+      "zoom": 3,
+      "fps": 60,
+      "frames": 246,
+      "running": true,
+      "tick": 249,
+      "medianFrameMs": 16.699999999999818,
+      "p95FrameMs": 16.700000000000728
+    },
+    {
+      "density": 1,
+      "zoom": 5,
+      "fps": 60.01197604790413,
+      "frames": 365,
+      "running": true,
+      "tick": 371,
+      "medianFrameMs": 16.699999999999818,
+      "p95FrameMs": 16.700000000000728
+    },
+    {
+      "density": 2,
+      "zoom": 1,
+      "fps": 19.33199999999999,
+      "frames": 43,
+      "running": true,
+      "tick": 131,
+      "medianFrameMs": 50,
+      "p95FrameMs": 66.59999999999991
+    },
+    {
+      "density": 2,
+      "zoom": 3,
+      "fps": 18,
+      "frames": 84,
+      "running": true,
+      "tick": 264,
+      "medianFrameMs": 50,
+      "p95FrameMs": 66.69999999999982
+    },
+    {
+      "density": 2,
+      "zoom": 5,
+      "fps": 18.66399999999998,
+      "frames": 125,
+      "running": true,
+      "tick": 397,
+      "medianFrameMs": 50,
+      "p95FrameMs": 66.70000000000073
+    }
+  ]
+}

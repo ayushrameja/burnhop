@@ -1,0 +1,12 @@
+{
+  "browser": "Playwright Chromium, headless",
+  "viewport": {
+    "width": 1280,
+    "height": 720
+  },
+  "note": "Observed idle practice rendering; automation environment, not a multiplayer capacity benchmark.",
+  "fps": 59.988023952095816,
+  "frames": 185,
+  "running": true,
+  "tick": 184
+}

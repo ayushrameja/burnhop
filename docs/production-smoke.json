@@ -1,0 +1,9 @@
+{
+  "productionSmoke": "passed",
+  "viewport": "1440x900 @2x",
+  "externalRequests": 0,
+  "errors": [],
+  "developmentDiagnosticsAbsent": true,
+  "captureAPIs": "emulated fullscreen, pointer lock and keyboard lock",
+  "controls": "fullscreen welcome gate and deliberate practice entry, live FPS, move, jump, boot thrust, right-button aim without firing, both-button fire, release-right continued fire, release-left stop, pause, unavailable paused FPS, focus trap, fullscreen-loss gate, paused restoration and explicit resume"
+}
