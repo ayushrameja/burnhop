@@ -23,10 +23,10 @@ Colyseus application 1879:
 
 - Runtime: Node 22; build preflight rejects versions below 22.18.
 - Repository: ayushrameja/burnhop. Root: `/`.
-- Install: `pnpm install --frozen-lockfile` with pnpm 11.3.0.
-- Build: `pnpm build:server`.
+- Install: `npx --yes pnpm@11.3.0 install --frozen-lockfile`.
+- Build: `npx --yes pnpm@11.3.0 build:server`.
 - Process file: root `ecosystem.config.js`, one `fork`, `wait_ready: true`.
-- App sends `process.send('ready')` only after HTTP/WebSocket listening starts.
+- Pinned `@colyseus/tools` handles Cloud's `/run/colyseus/2567.sock` listener and public WebSocket process path. HTTP admission guards install before the helper sends its single PM2 readiness notification. Local development retains TCP `PORT` and emits readiness itself.
 - `NODE_ENV=production`. The production game origin is allowed exactly for HTTP matchmaking and WebSocket upgrades.
 - Optional `ALLOWED_PREVIEW_ORIGINS`: comma-separated exact HTTPS origins. Never use a wildcard for Vercel previews. Localhost is permitted only outside production.
 
@@ -51,6 +51,8 @@ pnpm build
 pnpm build:server
 pnpm test:e2e
 pnpm test:online
+# After deployment, run only the player flow against the actual game origin:
+BURNHOP_SMOKE_URL=https://burnhop.lowhp.studio pnpm test:online
 pnpm build:loadtest
 node dist-tools/loadtest.mjs --endpoint https://de-fra-24270fd2.colyseus.cloud --seconds 900 --output load-results/frankfurt-15min.json
 ```
@@ -70,9 +72,14 @@ This shapes only the disposable container's loopback queue: nominal 150 ms RTT, 
 
 ## Evidence and remaining release gates
 
-- Shared/practice unit suites and server integration tests are executable in the repository.
-- Two isolated browser sessions passed invitation, distinct appearance, ready/countdown cancellation/start, locked joins, capture loss, page-refresh recovery and host departure checks locally.
-- Initial local eight-client 60-second smoke: 2,789 confirmed shots, no disconnects/errors, max rolling p99 3.60 ms, peak RSS 85.77 MiB, no sustained backlog. This is **not** a Frankfurt capacity result.
-- Actual Frankfurt fifteen-minute capacity validation and the real Canada–India playtest must be recorded before describing the release as validated for that connection.
+- September 5, 2026: all 330 unit/shared/backend tests passed, as did client/server typechecks and both production builds on Node 22.18.
+- 89 Chromium regression checks passed, including the new lazy multiplayer/fullscreen-entry race. One existing native OS pointer-capture test is opt-in and was skipped in this headless environment.
+- Both local online suites passed: invitation, distinct appearance, ready/countdown cancellation/start, locked joins, capture loss, page-refresh token rotation, host departure, 150 ms RTT/jitter, a one-second bidirectional stall, a 3.2-second acknowledgement stall, and automatic same-session reconnection.
+- The built Cloud entrypoint passed a separate Unix socket/proxy test with two actual SDK clients, matching compatibility, origin guards, Cloud WebSocket routing and exactly one readiness signal.
+- A separate production-build probe with an empty backend URL showed the unavailable state, disabled online admission, working practice movement/fire/pause, no page errors and no matchmaking requests.
+- Linux TCP impairment passed for 90.38 active seconds with eight clients, 3,860 confirmed shots, no disconnects/errors, 1,517 actual dropped packets and a timestamped one-second stall. Maximum rolling p99 was 2.656 ms and peak RSS was 97,488,896 bytes. Every bot moved in 73.5–89.8% of alive state samples, above the unchanged 40% minimum. This short run does not establish long-run memory stability. Evidence is in ignored `load-results/linux-network-2026-09-05-recovery/`.
+- The actual Frankfurt release at `7b25e1c` passed every capacity gate: 900.264 active seconds (921.039 wall-clock seconds), eight clients, four match starts, 40,187 confirmed shots and zero disconnects/errors. Maximum rolling p99 was 7.969 ms, peak RSS 114,495,488 bytes (109.19 MiB), longest sustained schedule deficit zero, and dropped simulation time zero. The final memory trend was -1.301 MiB/min across 61 samples. All eight bots moved in 76.4–80.4% of alive state samples. Full evidence: ignored `load-results/frankfurt-15min.json`.
+- Actual Cloud logs confirmed fork startup, the guarded Unix socket and old-worker shutdown after its rolling deployment. The provider's post-deploy helper logged a non-fatal `updateProcessConfig` PM2-extension error; the application stayed healthy and passed the full load gate. This is a managed-host maintenance note, not a gameplay test failure.
+- The real Canada–India human playtest is deferred at the owner's request. Do not describe the release as validated for that real connection until both players complete it.
 
 Host controls follow the longest-connected remaining pilot. Explicit Leave releases a slot immediately; disconnect reserves it for 30 seconds. Disconnected actors remain vulnerable and stay dead until reconnecting. Match state is temporary and is lost on process restart. Schedule maintenance between matches.

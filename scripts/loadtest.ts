@@ -30,6 +30,10 @@ interface Metrics {
     peakWorkMs: number; overBudgetTicks: number; maxInputBacklog: number;
     consecutiveInputBacklogTicks: number; resynchronizations: number;
     scheduleLagMs: number; lastTickAt: number;
+    maxConsecutiveInputBacklogTicks: number; longestScheduleDeficitMs: number;
+    scheduleWindowMs: number; observedTickRate: number;
+    pendingSimulationMs: number; peakPendingSimulationMs: number;
+    droppedSimulationMs: number; catchUpLimitHits: number;
   };
 }
 interface MetricsSample extends Metrics { elapsedSeconds: number; activeSeconds: number; phase: string }
@@ -60,6 +64,12 @@ interface Bot {
   maxPendingInputs: number;
   movementSamples: number;
   observations: number;
+  aliveObservations: number;
+  blockedInputFrames: number;
+  lastMoveX: NetworkInput['moveX'];
+  escapeDirection: NetworkInput['moveX'];
+  escapeUntilInput: number;
+  navigationRecoveries: number;
 }
 interface Options { endpoint: string; seconds: number; output: string; metricsIntervalMs: number }
 
@@ -99,7 +109,10 @@ async function fetchJson<T>(url: string): Promise<T> {
 }
 function command(bot: Bot): NetworkInput {
   const frame = neutralInput(0, ++bot.inputId), me = bot.controller.state;
-  if (!bot.connected || bot.room.state.phase !== 'playing' || me.health <= 0) return frame;
+  if (!bot.connected || bot.room.state.phase !== 'playing' || me.health <= 0) {
+    bot.blockedInputFrames = 0; bot.escapeUntilInput = 0;
+    return frame;
+  }
   let target: PlayerWire | undefined, closest = Infinity;
   for (const player of bot.room.state.players.values()) {
     if (player.id === bot.room.sessionId || player.health <= 0) continue;
@@ -117,6 +130,26 @@ function command(bot: Bot): NetworkInput {
   frame.jetPressed = phase % 180 === 20;
   frame.jetHeld = phase % 180 >= 20 && phase % 180 < 95;
   frame.crouchHeld = me.grounded && phase % 300 >= 265;
+  // Chasing an opponent through solid terrain can otherwise pin a bot against
+  // a wall indefinitely. Turn away and hop when prediction confirms no motion;
+  // this exercises actual movement while leaving the authoritative activity gate intact.
+  bot.blockedInputFrames = Math.hypot(me.vx, me.vy) < 10 ? bot.blockedInputFrames + 1 : 0;
+  if (bot.blockedInputFrames >= 24) {
+    bot.escapeDirection = (bot.lastMoveX || frame.moveX) > 0 ? -1 : 1;
+    bot.escapeUntilInput = bot.inputId + 90;
+    bot.blockedInputFrames = 0;
+    bot.navigationRecoveries++;
+  }
+  const escapeRemaining = bot.escapeUntilInput - bot.inputId;
+  if (escapeRemaining > 0) {
+    frame.moveX = bot.escapeDirection;
+    frame.jumpPressed = escapeRemaining === 90;
+    frame.jumpHeld = escapeRemaining > 78;
+    frame.jetPressed = escapeRemaining === 90;
+    frame.jetHeld = escapeRemaining > 45;
+    frame.crouchHeld = false;
+  }
+  bot.lastMoveX = frame.moveX;
   frame.fireHeld = true;
   frame.reloadPressed = me.ammo === 0 && me.reloadTicks === 0;
   if (target) {
@@ -166,8 +199,14 @@ function metricSummary(samples: MetricsSample[]) {
     maxP99WorkMs: Math.max(0, ...active.map(sample => sample.simulation!.p99WorkMs)),
     maxPeakWorkMs: Math.max(0, ...active.map(sample => sample.simulation!.peakWorkMs)),
     maxScheduleLagMs: Math.max(0, ...active.map(sample => sample.simulation!.scheduleLagMs)),
-    longestScheduleBacklogSeconds,
-    maxConsecutiveInputBacklogTicks: Math.max(0, ...active.map(sample => sample.simulation!.consecutiveInputBacklogTicks)),
+    // Lifetime server counters retain bad intervals that recover between HTTP polls.
+    longestScheduleBacklogSeconds: Math.max(longestScheduleBacklogSeconds,
+      ...active.map(sample => (sample.simulation!.longestScheduleDeficitMs ?? 0) / 1000)),
+    maxConsecutiveInputBacklogTicks: Math.max(0, ...active.map(sample =>
+      sample.simulation!.maxConsecutiveInputBacklogTicks ?? sample.simulation!.consecutiveInputBacklogTicks)),
+    minObservedTickRate: Math.min(60, ...active.map(sample => sample.simulation!.observedTickRate ?? 60)),
+    droppedSimulationMs: Math.max(0, ...active.map(sample => sample.simulation!.droppedSimulationMs ?? 0)),
+    catchUpLimitHits: Math.max(0, ...active.map(sample => sample.simulation!.catchUpLimitHits ?? 0)),
     memoryTrendMiBPerMinute,
     memoryTrendSampleCount: tail.length,
     maxInputBacklog: Math.max(0, ...active.map(sample => sample.simulation!.maxInputBacklog)),
@@ -216,15 +255,21 @@ async function main(): Promise<void> {
       const bot: Bot = { index, room, handle, predict, controller, lifeId: 0, phase: 'lobby', inputId: 0,
         connected: true, nextControlAt: 0, inputsSent: 0, moveIntentFrames: 0, fireIntentFrames: 0,
         shotsConfirmed: 0, hitsConfirmed: 0, deaths: 0, respawns: 0, drops: 0, reconnects: 0,
-        resyncs: 0, historyResyncRequests: 0, awaitingResync: false, nextHistoryResyncAt: 0, maxPendingInputs: 0, movementSamples: 0, observations: 0 };
+        resyncs: 0, historyResyncRequests: 0, awaitingResync: false, nextHistoryResyncAt: 0, maxPendingInputs: 0, movementSamples: 0, observations: 0, aliveObservations: 0,
+        blockedInputFrames: 0, lastMoveX: 0, escapeDirection: 0, escapeUntilInput: 0, navigationRecoveries: 0 };
       bots.push(bot);
       room.onStateChange(state => {
         if (state.phase !== 'playing') return;
         const player = state.players.get(room.sessionId);
         if (!player) return;
         bot.observations++;
-        // Velocity is direct authority; spawn teleport distances do not count as movement.
-        if (player.health > 0 && Math.hypot(player.vx, player.vy) > 1) bot.movementSamples++;
+        // Respawn delays are a match rule, not inactive bot behavior. Retain all observations
+        // for audit, but measure movement against the samples where this actor is alive.
+        if (player.health > 0) {
+          bot.aliveObservations++;
+          // Velocity is direct authority; spawn teleport distances do not count as movement.
+          if (Math.hypot(player.vx, player.vy) > 1) bot.movementSamples++;
+        }
       });
       room.onMessage('events', (events: ActorEvent[]) => {
         for (const event of events) {
@@ -335,7 +380,7 @@ async function main(): Promise<void> {
       eightClients: bots.length === PLAYER_COUNT && bots.every(bot => bot.drops === 0) &&
         samples.filter(sample => sample.phase === 'playing').every(sample => sample.connectedPlayers === PLAYER_COUNT && sample.reservedPlayers === 0),
       activeMovementAndFiring: bots.length === PLAYER_COUNT && bots.every(bot => bot.shotsConfirmed >= minimumShots &&
-        bot.moveIntentFrames > 0 && (bot.observations < 4 || bot.movementSamples >= bot.observations * 0.4)),
+        bot.moveIntentFrames > 0 && bot.aliveObservations > 0 && bot.movementSamples >= Math.max(1, bot.aliveObservations * 0.4)),
       simulationP99: metrics.sampleCount > 0 && metrics.maxP99WorkMs < TICK_BUDGET_MS,
       noSustainedBacklog: metrics.longestScheduleBacklogSeconds < 30 && metrics.maxConsecutiveInputBacklogTicks < 120,
       processMemoryBelow750MB: metrics.maxRssBytes > 0 && metrics.maxRssBytes < MEMORY_LIMIT_BYTES,
@@ -352,11 +397,12 @@ async function main(): Promise<void> {
       criteria: { p99WorkMsBelow: TICK_BUDGET_MS, rssBytesBelow: MEMORY_LIMIT_BYTES,
         sustainedScheduleBacklog: 'More than 100 ms behind for 30 consecutive seconds fails.',
         sustainedInputBacklog: 'More than eight buffered commands for 120 consecutive ticks fails.',
+        activeMovement: 'Every bot must show nonzero authoritative velocity in at least 40% of its alive state samples, and confirm the minimum firing activity.',
         memoryStability: 'Final five-minute RSS regression must grow no faster than 4 MiB/min, after the first minute.' },
       client: { node: process.version, maxLoopGapMs: maxClientLoopGapMs, maxInputBudget },
       bots: bots.map(({ index, inputsSent, moveIntentFrames, fireIntentFrames, shotsConfirmed, hitsConfirmed, deaths, respawns,
-        drops, reconnects, resyncs, historyResyncRequests, maxPendingInputs, movementSamples, observations, handle }) => ({ index, inputsSent, moveIntentFrames, fireIntentFrames,
-        shotsConfirmed, hitsConfirmed, deaths, respawns, drops, reconnects, resyncs, historyResyncRequests, maxPendingInputs, replayBufferSize: handle.replayBufferSize, movementSamples, observations })),
+        drops, reconnects, resyncs, historyResyncRequests, maxPendingInputs, movementSamples, observations, aliveObservations, navigationRecoveries, handle }) => ({ index, inputsSent, moveIntentFrames, fireIntentFrames,
+        shotsConfirmed, hitsConfirmed, deaths, respawns, drops, reconnects, resyncs, historyResyncRequests, maxPendingInputs, replayBufferSize: handle.replayBufferSize, movementSamples, observations, aliveObservations, navigationRecoveries })),
       failures, samples,
       limitations: ['A scripted Frankfurt load test does not validate real Canada–India player latency.',
         'Network impairment must be applied to the actual socket path; this script does not emulate TCP packet loss.'],
