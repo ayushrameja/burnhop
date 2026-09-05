@@ -71,8 +71,8 @@ export default function MultiplayerScreen({ canvasRef, captureRef, pauseRef, act
     runtimeRef.current?.pause();
     setPaused(true);
     onActiveChange(false);
-    void captureRef.current?.pause();
-  }, [captureRef, onActiveChange]);
+    if (document.pointerLockElement === canvasRef.current) void captureRef.current?.pause();
+  }, [canvasRef, captureRef, onActiveChange]);
 
   const prepareAssets = useCallback(() => {
     setAssetError(null);
@@ -106,7 +106,11 @@ export default function MultiplayerScreen({ canvasRef, captureRef, pauseRef, act
     pauseRef.current = pause;
     return () => { pauseRef.current = null; };
   }, [pauseRef, pause]);
-  useEffect(() => { if (!active) pause(); }, [active, pause]);
+  useEffect(() => {
+    // An initially gated, lazily loaded screen must not cancel the entrance's
+    // in-flight fullscreen request. App/GameCapture already own capture loss.
+    if (!active) { runtimeRef.current?.pause(); setPaused(true); onActiveChange(false); }
+  }, [active, onActiveChange]);
   useEffect(() => {
     if (!assets || !snapshot.sessionId || !canvasRef.current) return;
     const runtime = new OnlineRuntime(canvasRef.current, assets, connection, { onHud: setHud, onPause: pause, onPerformance: setFps });

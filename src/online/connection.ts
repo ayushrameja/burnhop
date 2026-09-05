@@ -121,7 +121,7 @@ export class OnlineConnection {
         if (this.room !== room) return;
         this.publish({ status: 'reconnecting', error: 'Connection lost. Rejoining your reserved slot…' });
         this.reset();
-        clearTimeout(this.reconnectTimer);
+        if (this.reconnectTimer) return;
         this.reconnectTimer = setTimeout(() => {
           if (this.room !== room || this.snapshot.status !== 'reconnecting') return;
           room.reconnection.enabled = false;
@@ -131,9 +131,11 @@ export class OnlineConnection {
       });
       room.onReconnect(() => {
         if (this.room !== room) return;
-        clearTimeout(this.reconnectTimer);
+        clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined;
         this.publish({ status: 'connected', error: null });
-        this.saveSession(); this.reset();
+        // The SDK rotates its token after invoking onReconnect, within the same message.
+        queueMicrotask(() => { if (this.room === room) this.saveSession(); });
+        this.reset();
       });
       room.onError((_code, message) => { if (this.room === room) this.publish({ error: message || 'The game server reported a connection error.' }); });
       room.onLeave((code, reason) => {
@@ -167,7 +169,7 @@ export class OnlineConnection {
   private reset(player?: MatchPlayer): void { for (const listener of this.resetListeners) listener(player); }
   private publish(patch: Partial<OnlineSnapshot>): void { this.snapshot = { ...this.snapshot, ...patch }; this.notify(); }
   private notify(): void { for (const listener of this.listeners) listener(); }
-  private clearTimers(): void { clearTimeout(this.reconnectTimer); clearInterval(this.heartbeat); }
+  private clearTimers(): void { clearTimeout(this.reconnectTimer); clearInterval(this.heartbeat); this.reconnectTimer = undefined; this.heartbeat = undefined; }
   private saveSession(): void {
     if (!this.room) return;
     try { sessionStorage.setItem(SESSION_KEY, JSON.stringify({ endpoint: this.endpoint, token: this.room.reconnectionToken,

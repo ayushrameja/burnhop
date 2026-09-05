@@ -79,6 +79,7 @@ export class BurnhopRoom extends Room<{ state: MatchWire; input: InputWire }> {
       }
     });
     this.onMessage('resync', client => { if (this.acceptControl(client)) this.resynchronize(client); });
+    this.metrics.startTimestep(this.clock.elapsedTime);
     this.setFixedTimestep(() => this.step(), MATCH_CONFIG.tickRate);
     this.clock.setInterval(() => {
       if (this.match.phase === 'lobby' && Date.now() - this.lastLobbyActivity >= MATCH_CONFIG.idleLobbySeconds * 1000) {
@@ -227,6 +228,7 @@ export class BurnhopRoom extends Room<{ state: MatchWire; input: InputWire }> {
       }
     }
     if (events.length) this.broadcast('events', events);
-    this.metrics.record(performance.now() - started, backlog, Date.now(), longestBacklog);
+    const finished = performance.now();
+    this.metrics.record(finished - started, backlog, finished, longestBacklog, this.clock.elapsedTime);
   }
 }

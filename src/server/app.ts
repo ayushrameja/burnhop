@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse, type RequestListener } from 'node:http';
-import { Server, matchMaker } from '@colyseus/core';
+import { LocalDriver, LocalPresence, Server, matchMaker } from '@colyseus/core';
 import { WebSocketTransport } from '@colyseus/ws-transport';
 import { BurnhopRoom } from './BurnhopRoom';
 import { COMPATIBILITY_ID, MATCH_CONFIG } from '../multiplayer/model';
@@ -101,10 +101,20 @@ export async function startBackend(port = 2567, hostname = '0.0.0.0') {
     const origin = headers.get('origin');
     return origin && isAllowedOrigin(origin) ? { 'Access-Control-Allow-Origin': origin } : {};
   };
-  const server = new Server({ transport, greet: false, gracefullyShutdown: false });
+  // Cloud delegates Server.listen() to @colyseus/tools and binds a Unix socket.
+  // Its delegated call drops the outer listening callback. Wrap the transport
+  // callback instead: Colyseus binds its routes first, then the guard installs
+  // synchronously before either local or Cloud startup reports readiness.
+  const listen = transport.listen.bind(transport);
+  transport.listen = (address, host, backlog, onListening) => listen(address, host, backlog, () => {
+    onListening?.();
+    installHttpGuard(http);
+  });
+  const server = new Server({ transport, presence: new LocalPresence(), driver: new LocalDriver(),
+    greet: false, gracefullyShutdown: false });
   server.define('burnhop', BurnhopRoom);
-  // Colyseus installs its matcher before invoking this listening callback; the
-  // guard wraps it synchronously before the event loop can accept any request.
-  await server.listen(port, hostname, undefined, () => installHttpGuard(http));
-  return { server, http, port: (http.address() as { port: number }).port };
+  await server.listen(port, hostname);
+  const address = http.address();
+  if (!address) throw new Error('The game server did not start listening.');
+  return { server, http, port: typeof address === 'string' ? port : address.port, address };
 }

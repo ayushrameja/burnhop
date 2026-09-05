@@ -56,8 +56,21 @@ describe('online session lifecycle', () => {
     const connection = new OnlineConnection({ endpoint: 'ws://localhost:2567' });
     await connection.create('Pilot', DEFAULT_APPEARANCE);
     room.onDrop.invoke(); expect(connection.getSnapshot().status).toBe('reconnecting');
-    await vi.advanceTimersByTimeAsync(30_001);
+    await vi.advanceTimersByTimeAsync(15_000);
+    room.onDrop.invoke(); // A failed retry must not restart the original 30-second window.
+    await vi.advanceTimersByTimeAsync(15_001);
     expect(connection.getSnapshot()).toMatchObject({ status: 'error', sessionId: '', players: [], phase: 'lobby' });
+    connection.dispose();
+  });
+  it('saves the rotated token immediately after the SDK reconnect callback completes', async () => {
+    const room = fakeRoom(); sdk.create.mockResolvedValue(room);
+    const connection = new OnlineConnection({ endpoint: 'ws://localhost:2567' });
+    await connection.create('Pilot', DEFAULT_APPEARANCE);
+    room.onDrop.invoke(); room.onReconnect.invoke();
+    // SDK Room updates this property after dispatching its public onReconnect signal.
+    room.reconnectionToken = `${room.roomId}:rotated-secret`;
+    await Promise.resolve();
+    expect(JSON.parse(sessionStorage.getItem('burnhop-online-session-v1')!).token).toBe(room.reconnectionToken);
     connection.dispose();
   });
   it('normalizes invite codes and explains a locked playing match before socket admission', async () => {
