@@ -1,4 +1,4 @@
-import { moveAndCollide, rayRectDistance, raySolidDistance, rectOverlapsSolid, type CollisionSolid } from './collision';
+import { compileTerrain, moveAndCollide, rayRectDistance, raySolidDistance, rectOverlapsSolid, type CollisionSolid } from './collision';
 import { CHARACTER_SCALE, CROUCH_TRANSITION_SECONDS, getStanceHeight, getStanceWeaponOffset, STANDING_COLLISION_HEIGHT } from './stance';
 import type { Arena, GameEvent, InputCommand, PlayerState, Vec2, WorldState } from './types';
 
@@ -62,9 +62,13 @@ export function cloneWorld(state: WorldState): WorldState {
  * Physical stance, momentum and timers remain frozen. Resumed ticks release crouch with clearance checks.
  */
 export function releasePlayerInput(state: WorldState): void {
-  state.player.thrusting = false;
-  state.player.thrustLatched = false;
-  state.player.jumpBufferTicks = 0;
+  releaseActorInput(state.player);
+}
+
+export function releaseActorInput(player: PlayerState): void {
+  player.thrusting = false;
+  player.thrustLatched = false;
+  player.jumpBufferTicks = 0;
 }
 
 export function getWeaponOrigin(player: PlayerState): Vec2 {
@@ -77,23 +81,44 @@ export function getMuzzlePosition(player: PlayerState): Vec2 {
   return { x: origin.x + Math.cos(player.aimAngle) * CONFIG.muzzleLength, y: origin.y + Math.sin(player.aimAngle) * CONFIG.muzzleLength };
 }
 
-function getSolids(arena: Arena): CollisionSolid[] {
-  return [
+export interface CompiledArena { readonly arena: Arena; readonly solids: readonly CollisionSolid[] }
+const compiledArenas = new WeakMap<Arena, CompiledArena>();
+
+/** Compile immutable collision contours and bounds once per authored arena. */
+export function compileArena(arena: Arena): CompiledArena {
+  const cached = compiledArenas.get(arena);
+  if (cached) return cached;
+  for (const polygon of arena.terrain ?? []) compileTerrain(polygon);
+  const solids: readonly CollisionSolid[] = Object.freeze([
     ...arena.platforms,
     ...(arena.terrain ?? []),
     ...(arena.openFloor ? [] : [{ x: -arena.width, y: arena.floorY, width: arena.width * 3, height: arena.height * 2 }]),
     { x: -arena.width, y: -arena.height, width: arena.width, height: arena.height * 3 },
     { x: arena.width, y: -arena.height, width: arena.width, height: arena.height * 3 },
     { x: -arena.width, y: -arena.height, width: arena.width * 3, height: arena.height },
-  ];
+  ]);
+  const compiled = Object.freeze({ arena, solids });
+  compiledArenas.set(arena, compiled);
+  return compiled;
 }
+
+export function cloneActor<T extends PlayerState>(player: T): T {
+  return { ...player, weapon: { ...player.weapon } };
+}
+
+/** Restore every simulation field, including input latches and weapon timers. */
+export function restoreActor<T extends PlayerState>(player: T, snapshot: T): void {
+  Object.assign(player, snapshot, { weapon: { ...snapshot.weapon } });
+}
+
+export type ActorInput = Omit<InputCommand, 'tick' | 'actorId'>;
 
 function approach(value: number, target: number, amount: number) {
   return value < target ? Math.min(value + amount, target) : Math.max(value - amount, target);
 }
 
 /** Resize upward from the feet; blocked expansion retries on every future tick. */
-function updateStance(player: PlayerState, command: InputCommand, solids: CollisionSolid[]) {
+function updateStance(player: PlayerState, command: ActorInput, solids: readonly CollisionSolid[]) {
   const separateJetIntent = command.jetpack?.source === 'separate' && command.jetpack.held;
   const target = player.grounded && command.crouchHeld && !command.jumpPressed && !command.jumpHeld
     && !separateJetIntent && player.jumpBufferTicks === 0 ? 1 : 0;
@@ -131,7 +156,7 @@ function jump(player: PlayerState, events: GameEvent[], preserveThrust = false) 
 /** Reserve a descending press for hopping only when its actual path reaches a surface.
  * Probing horizontal motion too avoids treating a nearby platform edge as a landing.
  */
-function landingWithinBuffer(player: PlayerState, moveX: InputCommand['moveX'], solids: CollisionSolid[]): boolean {
+function landingWithinBuffer(player: PlayerState, moveX: InputCommand['moveX'], solids: readonly CollisionSolid[]): boolean {
   if (player.vy < 0) return false;
   const probe = { ...player };
   for (let i = 0; i < CONFIG.jumpBufferTicks; i++) {
@@ -146,8 +171,8 @@ function landingWithinBuffer(player: PlayerState, moveX: InputCommand['moveX'], 
   return false;
 }
 
-function updateMovement(state: WorldState, command: InputCommand, solids: CollisionSolid[], events: GameEvent[]) {
-  const p = state.player, dt = CONFIG.fixedDt;
+function updateMovement(p: PlayerState, command: ActorInput, solids: readonly CollisionSolid[], events: GameEvent[]) {
+  const dt = CONFIG.fixedDt;
   const jetpack = command.jetpack ?? { source: 'combined', pressed: command.jumpPressed, held: command.jumpHeld };
   const separateJetpack = jetpack.source === 'separate';
   const wasGrounded = p.grounded;
@@ -218,7 +243,7 @@ function updateMovement(state: WorldState, command: InputCommand, solids: Collis
   }
 }
 
-function fireShot(state: WorldState, solids: CollisionSolid[], events: GameEvent[]) {
+function fireShot(state: WorldState, solids: readonly CollisionSolid[], events: GameEvent[]) {
   const p = state.player, target = state.target;
   const origin = getWeaponOrigin(p);
   const direction = { x: Math.cos(p.aimAngle), y: Math.sin(p.aimAngle) };
@@ -266,7 +291,7 @@ function recoverFallenPlayer(state: WorldState, arena: Arena): boolean {
 export function stepSimulation(state: WorldState, command: InputCommand, arena: Arena): GameEvent[] {
   if (command.tick !== state.tick) throw new Error(`Expected command tick ${state.tick}, received ${command.tick}`);
   if (command.actorId !== state.player.id) throw new Error(`Unknown actor: ${command.actorId}`);
-  const events: GameEvent[] = [], solids = getSolids(arena);
+  const events: GameEvent[] = [], solids = compileArena(arena).solids;
   const target = state.target;
   target.hitTicks = Math.max(0, target.hitTicks - 1);
   if (target.respawnTicks > 0 && --target.respawnTicks === 0) {
@@ -277,20 +302,46 @@ export function stepSimulation(state: WorldState, command: InputCommand, arena: 
   }
   let recovered = recoverFallenPlayer(state, arena);
   if (!recovered) {
-    updateMovement(state, command, solids, events);
+    updateMovement(state.player, command, solids, events);
     recovered = recoverFallenPlayer(state, arena);
   }
-  const weapon = state.player.weapon;
+  advanceWeapon(state.player, command, events, !recovered, () => fireShot(state, solids, events));
+  state.tick++;
+  return events;
+}
+
+function advanceWeapon(player: PlayerState, command: ActorInput, events: GameEvent[], active: boolean, fire: () => void): void {
+  const weapon = player.weapon;
   weapon.cooldownTicks = Math.max(0, weapon.cooldownTicks - 1);
   if (weapon.reloadTicks > 0 && --weapon.reloadTicks === 0) {
     weapon.ammo = CONFIG.magazineSize;
-    events.push({ type: 'reloadEnd', ...getWeaponOrigin(state.player) });
+    events.push({ type: 'reloadEnd', ...getWeaponOrigin(player) });
   }
-  if (!recovered && command.reloadPressed && weapon.reloadTicks === 0 && weapon.ammo < CONFIG.magazineSize) {
+  if (active && command.reloadPressed && weapon.reloadTicks === 0 && weapon.ammo < CONFIG.magazineSize) {
     weapon.reloadTicks = CONFIG.reloadTicks;
-    events.push({ type: 'reloadStart', ...getWeaponOrigin(state.player) });
+    events.push({ type: 'reloadStart', ...getWeaponOrigin(player) });
   }
-  if (!recovered && command.fireHeld && weapon.reloadTicks === 0 && weapon.cooldownTicks === 0 && weapon.ammo > 0) fireShot(state, solids, events);
-  state.tick++;
+  if (active && command.fireHeld && weapon.reloadTicks === 0 && weapon.cooldownTicks === 0 && weapon.ammo > 0) fire();
+}
+
+/** A single actor tick. Shots are intents clipped to terrain; only the match authority applies damage. */
+export function stepActor(player: PlayerState, command: ActorInput, arena: CompiledArena): GameEvent[] {
+  const events: GameEvent[] = [];
+  if (player.health <= 0) return events;
+  updateMovement(player, command, arena.solids, events);
+  advanceWeapon(player, command, events, true, () => {
+    const origin = getWeaponOrigin(player);
+    const direction = { x: Math.cos(player.aimAngle), y: Math.sin(player.aimAngle) };
+    let distance: number = CONFIG.shotRange;
+    for (const solid of arena.solids) {
+      const collision = raySolidDistance(origin, direction, solid, distance);
+      if (collision !== null) distance = Math.min(distance, collision);
+    }
+    const barrelOffset = distance < CONFIG.muzzleLength ? 0 : CONFIG.muzzleLength;
+    events.push({ type: 'shot', x: origin.x + direction.x * barrelOffset, y: origin.y + direction.y * barrelOffset,
+      toX: origin.x + direction.x * distance, toY: origin.y + direction.y * distance, hit: false });
+    player.weapon.ammo--;
+    player.weapon.cooldownTicks = CONFIG.shotCooldownTicks;
+  });
   return events;
 }

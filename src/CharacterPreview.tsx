@@ -3,7 +3,7 @@ import { CHARACTER_LOOKS, type CharacterLookId, type DetailedAppearance } from '
 import { calculateDetailedCharacterRig, drawDetailedCharacter } from './game/detailedCharacter';
 import type { CharacterPose } from './game/character';
 import { CHARACTER_SCALE } from './game/stance';
-import type { GameAssets } from './game/types';
+import type { GameAssets } from './game/assets';
 import './character-preview.css';
 
 type PoseMode = 'stand' | 'crouch' | 'walk' | 'jump' | 'jet';

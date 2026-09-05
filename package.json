@@ -5,25 +5,38 @@
   "type": "module",
   "packageManager": "pnpm@11.3.0",
   "engines": {
-    "node": ">=24 <25",
+    "node": ">=22.18 <23",
     "pnpm": ">=11 <12"
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "pnpm typecheck:client && vite build",
+    "build:server": "pnpm check:node && pnpm typecheck:server && vite build --config vite.server.config.ts",
+    "start:server": "node dist-server/index.mjs",
+    "build:loadtest": "tsc --noEmit -p tsconfig.tools.json && vite build --config vite.loadtest.config.ts",
+    "test:online": "playwright test --config playwright.online.config.ts",
+    "check:node": "node scripts/check-node.mjs",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "pnpm typecheck:client && pnpm typecheck:server",
+    "typecheck:client": "tsc --noEmit -p tsconfig.json",
+    "typecheck:server": "tsc --noEmit -p tsconfig.server.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@colyseus/core": "0.18.10",
+    "@colyseus/schema": "5.0.27",
+    "@colyseus/sdk": "0.18.2",
+    "@colyseus/ws-transport": "0.18.2",
+    "express": "5.2.1",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
-    "@types/node": "24.13.3",
+    "@types/express": "5.0.6",
+    "@types/node": "22.20.1",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.7",
     "@vitejs/plugin-react": "6.1.1",

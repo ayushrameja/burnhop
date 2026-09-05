@@ -124,7 +124,7 @@ test('menu music loops at 10%, follows menu navigation, and stops for gameplay, 
   expect(errors).toEqual([]);
 });
 
-test('menu and pause buttons sound on hover, click and keyboard navigation without child or disabled duplicates', async ({ page }) => {
+test('menu and pause buttons sound on hover, click and keyboard navigation without child duplicates', async ({ page }) => {
   await openMenu(page);
   await expectMusic(page, true);
   const arena = page.getByRole('radio', { name: 'Outpost', exact: true });
@@ -147,9 +147,11 @@ test('menu and pause buttons sound on hover, click and keyboard navigation witho
   await page.waitForTimeout(100);
   await launch.locator('svg').hover();
   expect(await toneCount(page)).toBe(before);
-  await page.getByRole('button', { name: /Multiplayer.*coming soon/i }).hover();
-  expect(await toneCount(page)).toBe(before);
+  await page.getByRole('button', { name: 'Multiplayer', exact: true }).hover();
+  await expect.poll(() => toneCount(page)).toBeGreaterThan(before);
+  before = await toneCount(page);
 
+  await page.waitForTimeout(100);
   await page.getByRole('button', { name: 'Customize', exact: true }).hover();
   await expect.poll(() => toneCount(page)).toBeGreaterThan(before);
   before = await toneCount(page);
@@ -159,6 +161,11 @@ test('menu and pause buttons sound on hover, click and keyboard navigation witho
   await launch.focus();
   await page.waitForTimeout(100);
   before = await toneCount(page);
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: 'Multiplayer', exact: true })).toBeFocused();
+  await expect.poll(() => toneCount(page)).toBeGreaterThan(before);
+  before = await toneCount(page);
+  await page.waitForTimeout(100);
   await page.keyboard.press('Tab');
   await expect(page.getByRole('button', { name: 'Customize', exact: true })).toBeFocused();
   await expect.poll(() => toneCount(page)).toBeGreaterThan(before);

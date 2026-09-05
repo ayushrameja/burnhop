@@ -1,5 +1,13 @@
 node_modules/
 dist/
+dist-server/
+dist-tools/
+.env
+.env.*
+!.env.example
+.colyseus-cloud.json
+*.log
+load-results/
 test-results/
 test-results-*/
 playwright-report/

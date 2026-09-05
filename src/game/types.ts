@@ -31,7 +31,6 @@ export type GameEvent =
   | { type: 'shot'; x: number; y: number; toX: number; toY: number; hit: boolean }
   | { type: 'hit'; x: number; y: number; damage: number }
   | { type: 'targetDeath' | 'targetRespawn' | 'reloadStart' | 'reloadEnd' | 'jump' | 'land'; x: number; y: number };
-export interface GameAssets { arena: Arena; images: Record<string, HTMLImageElement> }
 export interface HudState {
   health: number; fuel: number; ammo: number; reloadProgress: number;
   shotsFired: number; hits: number; kills: number; targetHealth: number;

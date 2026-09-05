@@ -1,23 +1,25 @@
 # Burnhop
 
-A locally playable shooting range and Outpost arena with jet boots. Made with TypeScript, React, Vite, and the browser's Canvas 2D API. No game engine.
+A shooting range and eight-player Outpost free-for-all with jet boots. Made with TypeScript, React, Vite, Canvas 2D and an authoritative Colyseus server. The browser game stays on Vercel.
 
 ## Run it
 
-Use Node **24** and pnpm **11.3.0** (the exact tested dependency versions are pinned).
+Use Node **22.18 or later within 22.x** and pnpm **11.3.0** (the exact tested dependency versions are pinned). Run `nvm use` first.
 
 ```sh
 pnpm install
 pnpm dev
 ```
 
-Open **http://localhost:5173**. A quiet moonlit desert entrance shows only **Enter game**. That click requests fullscreen and reveals the animated main menu with a usable cursor. Choose a map card and press **Enter practice** to capture the mouse, load that arena, and start a solo session. **Multiplayer — coming soon** is visible but unavailable. No accounts or server needed.
+Open **http://localhost:5173**. A quiet moonlit desert entrance shows only **Enter game**. That click requests fullscreen and reveals the animated main menu with a usable cursor. Choose a map card and press **Enter practice** to capture the mouse, load that arena, and start a solo session. Solo practice needs no account or backend.
+
+**Multiplayer** creates or joins an unlisted 2–8-player Outpost room. Enter a nickname, share the invite, load the map, and mark ready. The host starts a three-second countdown followed by five minutes of free-for-all. Kills decide the result; equal leaders draw. The server owns combat, respawns, scores, time and host transfer. Guest sessions recover for 30 seconds after a lost connection or refresh. Online menus neutralize controls while the match continues. Read [the deployment and verification runbook](docs/multiplayer-release.md) for local multiplayer, hosting settings and release gates.
 
 Fullscreen is required for the entire game, including the menu, settings and character studies. Leaving fullscreen pauses gameplay and shows a persistent **Return to fullscreen** screen. Returning restores the current screen; a paused practice session still requires **Resume**. Browsers that cannot grant fullscreen remain on the entrance with an explanation and retry; there is no windowed-play option.
 
 Tap Escape to pause and free the cursor while retaining fullscreen where supported. Hold Escape continuously for about **2 seconds** to exit fullscreen, or use **Exit fullscreen** in pause. A small progress bar appears during the hold; releasing early cancels, and repeated taps do not exit. Browsers with Keyboard Lock support this tap/hold distinction; other browsers may exit fullscreen immediately. The browser's own emergency exit remains available. Resume requires an explicit click. Returning to the main menu ends the practice session and keeps the fullscreen shell.
 
-The interface uses charcoal, warm white and restrained red. The entrance uses a cold blue night sky, stars, moon, layered desert dunes and drifting wind. Your actual customized pilot runs and fires in the separate main menu’s canvas hangar backdrop. Reduced motion freezes both scenes. The persistent HUD separates a cyan jet-fuel gauge and red health strip on the left from the ammunition panel on the right. Fuel has explicit low/empty states; ammunition shows rounds, magazine capacity and reload progress. Health reads the current player state (100 in safe practice); no multiplayer damage system is implied. Eliminations and accuracy live in pause, and the controls guide stays collapsed until opened.
+The interface uses charcoal, warm white and restrained red. The entrance uses a cold blue night sky, stars, moon, layered desert dunes and drifting wind. Your actual customized pilot runs and fires in the separate main menu’s canvas hangar backdrop. Reduced motion freezes both scenes. The persistent HUD separates a cyan jet-fuel gauge and red health strip on the left from the ammunition panel on the right. Fuel has explicit low/empty states; ammunition shows rounds, magazine capacity and reload progress. Health stays at 100 in safe practice and follows server-authoritative damage online. The controls guide stays collapsed until opened.
 
 For the crouch pose study, open **http://localhost:5173/?preview=crouch** or expand **Studio** in the development menu and choose **Crouch preview**. Compare upright standing with a crouch, scrub the depth slider, replay the transition, flip facing, or show the leg joints. The small figures use the same scale as gameplay. Choose **Try in practice** to enter the practice flow and use the approved crouch in the range. Existing character colours carry into the preview. Reduced motion disables replay and makes stance buttons immediate; the slider remains available.
 

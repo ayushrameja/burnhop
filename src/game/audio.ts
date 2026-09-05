@@ -9,6 +9,7 @@ export interface MovementAudioState {
 
 type Channel = 'weapons' | 'movement';
 type Voice = { source: AudioBufferSourceNode; gain: GainNode; filter?: BiquadFilterNode };
+type ActorSoundState = { movement: MovementAudioState | null; distance: number; stepIndex: number; shotIndex: number; reloadProgress: number; jet: Voice | null };
 const STEP_DISTANCE = Math.PI / 0.045; // Same alternating-foot cadence as the renderer.
 const SAMPLE_NAMES = [
   'rifle-1', 'rifle-2', 'rifle-3', 'footstep-1', 'footstep-2', 'footstep-3', 'footstep-4',
@@ -38,6 +39,8 @@ export class GameAudio {
   private stepIndex = 0;
   private shotIndex = 0;
   private reloadProgress = -1;
+  private actors = new Map<string, ActorSoundState>();
+  private spatialVolume = 1;
 
   async unlock(): Promise<void> {
     if (this.disposed) return;
@@ -130,7 +133,7 @@ export class GameAudio {
       voice = { source: context.createBufferSource(), gain: context.createGain() };
       voice.source.buffer = this.samples.get(name) ?? this.fallback(fallback);
       voice.source.playbackRate.value = rate;
-      voice.gain.gain.value = volume;
+      voice.gain.gain.value = volume * this.spatialVolume;
       voice.source.connect(voice.gain);
       voice.gain.connect(this.channels[channel]!);
       const activeVoice = voice;
@@ -155,7 +158,7 @@ export class GameAudio {
       voice.filter!.frequency.value = 1800;
       voice.filter!.Q.value = 0.65;
       voice.gain.gain.setValueAtTime(0, context.currentTime);
-      voice.gain.gain.setTargetAtTime(0.38, context.currentTime, 0.045);
+      voice.gain.gain.setTargetAtTime(0.38 * this.spatialVolume, context.currentTime, 0.045);
       voice.source.connect(voice.filter!);
       voice.filter!.connect(voice.gain);
       voice.gain.connect(this.channels.movement!);
@@ -233,6 +236,29 @@ export class GameAudio {
     }
   }
 
+  /** One audio context, independent footsteps/reload/jet state for each online actor. */
+  updateActor(id: string, state: MovementAudioState, reloadProgress: number, thrusting: boolean,
+    events: GameEvent[], listener: { x: number; y: number }, local = false): void {
+    if (this.disposed || this.paused) return;
+    const practice: ActorSoundState = { movement: this.movement, distance: this.distance, stepIndex: this.stepIndex,
+      shotIndex: this.shotIndex, reloadProgress: this.reloadProgress, jet: this.jet };
+    const actor = this.actors.get(id) ?? { movement: null, distance: 0, stepIndex: 0, shotIndex: 0, reloadProgress: -1, jet: null };
+    Object.assign(this, actor);
+    this.spatialVolume = local ? 1 : Math.max(0, 0.7 * (1 - Math.hypot(state.x - listener.x, state.y - listener.y) / 1500));
+    this.play(events); this.updateMovement(state); this.updateReload(reloadProgress); this.setThrust(thrusting && this.spatialVolume > 0);
+    if (this.jet && this.context) this.jet.gain.gain.setTargetAtTime(0.38 * this.spatialVolume, this.context.currentTime, 0.05);
+    this.actors.set(id, { movement: this.movement, distance: this.distance, stepIndex: this.stepIndex,
+      shotIndex: this.shotIndex, reloadProgress: this.reloadProgress, jet: this.jet });
+    Object.assign(this, practice); this.spatialVolume = 1;
+  }
+
+  retainActors(ids: ReadonlySet<string>): void {
+    for (const [id, actor] of this.actors) if (!ids.has(id)) {
+      if (actor.jet) this.stopVoice(actor.jet);
+      this.actors.delete(id);
+    }
+  }
+
   /** Cut every voice immediately; no scheduled Foley continues behind the pause screen. */
   pause(): void {
     this.paused = true;
@@ -240,6 +266,7 @@ export class GameAudio {
     this.distance = 0;
     this.syncVolumes();
     this.stopVoices();
+    this.actors.clear();
   }
 
   private disconnectVoice(voice: Voice): void {
@@ -249,6 +276,7 @@ export class GameAudio {
     voice.gain.disconnect();
     this.voices.delete(voice);
     if (this.jet === voice) this.jet = null;
+    for (const actor of this.actors.values()) if (actor.jet === voice) actor.jet = null;
   }
 
   private stopVoice(voice: Voice): void {

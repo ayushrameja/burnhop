@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import CrouchPreview from './CrouchPreview';
 import CharacterCreator from './CharacterCreator';
 import CharacterPreview from './CharacterPreview';
@@ -15,10 +15,12 @@ import { readSettings, writeSettings, type Settings } from './game/settings';
 import { GameCapture } from './game/capture';
 import { loadGame } from './game/loading';
 import { arenaIdFromSearch, getArena, type ArenaDefinition, type ArenaId } from './game/arenas';
-import type { GameAssets, HudState } from './game/types';
+import type { GameAssets } from './game/assets';
+import type { HudState } from './game/types';
+const MultiplayerScreen = lazy(() => import('./MultiplayerScreen'));
 import type { GameRuntime } from './game/runtime';
 
-type Screen = 'menu' | 'loading' | 'customize' | 'practice' | 'crouch-preview' | 'character-preview' | 'settings';
+type Screen = 'menu' | 'multiplayer' | 'loading' | 'customize' | 'practice' | 'crouch-preview' | 'character-preview' | 'settings';
 const EMPTY_HUD: HudState = { health: 100, fuel: 100, ammo: 30, reloadProgress: -1, shotsFired: 0, hits: 0, kills: 0, targetHealth: 100 };
 
 function Arrow() {
@@ -54,6 +56,8 @@ export default function App() {
   const shellRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const runtimeRef = useRef<GameRuntime | null>(null);
+  const onlinePauseRef = useRef<(() => void) | null>(null);
+  const [onlineActive, setOnlineActive] = useState(false);
   const captureRef = useRef<GameCapture | null>(null);
   const assetRequest = useRef(0);
   const runtimeArenaRef = useRef<ArenaId | null>(null);
@@ -62,7 +66,9 @@ export default function App() {
   const busy = useRef(false);
   const pausedRef = useRef(true);
   const [screen, setScreen] = useState<Screen>(() => {
-    const preview = new URLSearchParams(window.location.search).get('preview');
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('room') || params.get('online') === '1') return 'multiplayer';
+    const preview = params.get('preview');
     return preview === 'character' ? 'character-preview' : preview === 'crouch' ? 'crouch-preview' : 'menu';
   });
   const screenRef = useRef(screen);
@@ -95,13 +101,14 @@ export default function App() {
   const resumeRef = useRef<HTMLButtonElement>(null);
   const launchRef = useRef<HTMLButtonElement>(null);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
-  const menuAudio = useMenuAudio(settings.muted, !gateVisible && screen !== 'practice' && screen !== 'loading', settings.audio);
+  const menuAudio = useMenuAudio(settings.muted, !gateVisible && screen !== 'practice' && screen !== 'loading' && screen !== 'multiplayer', settings.audio);
 
   const pause = useCallback(() => {
     generation.current++;
     assetRequest.current++;
     pausedRef.current = true;
     runtimeRef.current?.pause();
+    onlinePauseRef.current?.();
     setPaused(true);
     setFps(null);
     setPending(false);
@@ -266,6 +273,8 @@ export default function App() {
     setScreen('menu');
     const url = new URL(window.location.href);
     url.searchParams.delete('preview');
+    url.searchParams.delete('room');
+    url.searchParams.delete('online');
     window.history.replaceState(null, '', url);
   };
   const preview = (kind: 'character' | 'crouch') => {
@@ -294,8 +303,8 @@ export default function App() {
 
   return <div ref={shellRef} className="game-shell" data-reduced-motion={settings.reducedMotion} {...menuAudio.handlers}>
     <div className="game-content" inert={gateVisible} aria-hidden={gateVisible} data-ui-audio={!gateVisible && (screen !== 'practice' || paused)}>
-    <canvas ref={canvasRef} className="game-canvas" data-testid="game-canvas" tabIndex={screen === 'practice' && !paused && !gateVisible ? 0 : -1}
-      aria-hidden={screen !== 'practice' || paused || gateVisible}
+    <canvas ref={canvasRef} className="game-canvas" data-testid="game-canvas" tabIndex={((screen === 'practice' && !paused) || onlineActive) && !gateVisible ? 0 : -1}
+      aria-hidden={!((screen === 'practice' && !paused) || onlineActive) || gateVisible}
       aria-label={`${activeArena.name}. Mouse aims. ${controlHelp(settings.controls).map(item => `${item.keys.join(' or ') || 'Unbound'}: ${item.description}.`).join(' ')}`} />
     {screen === 'menu' && !gateVisible && <main className="menu-screen" data-testid="menu-screen">
       <MenuBackdrop appearance={settings.appearance} reducedMotion={settings.reducedMotion} />
@@ -306,8 +315,8 @@ export default function App() {
         <div className="menu-actions">
           <ArenaSelector selected={selectedArenaId} onChange={selectArena} />
           <button ref={launchRef} className="launch-button" onClick={() => enterPractice()} disabled={pending} aria-label="Enter practice" aria-describedby="arena-selection-summary"><span><strong>{pending ? 'ENTERING…' : 'ENTER PRACTICE'}</strong><small>{selectedArena.name} <span aria-hidden="true">/</span> Solo session</small></span><Arrow /></button>
-          <button className="multiplayer-button" disabled aria-label="Multiplayer — coming soon">
-            <span>MULTIPLAYER</span><small>COMING SOON</small>
+          <button className="multiplayer-button" onClick={() => { const url = new URL(window.location.href); url.searchParams.set('online', '1'); window.history.replaceState(null, '', url); setScreen('multiplayer'); }} aria-label="Multiplayer">
+            <span>MULTIPLAYER</span><small>PRIVATE MATCH · 2–8 PLAYERS</small>
           </button>
           {captureError && <p className="capture-error" role="alert" data-testid="capture-error">{captureError}</p>}
           <nav className="menu-secondary" aria-label="Pilot and preferences">
@@ -321,6 +330,7 @@ export default function App() {
       </footer>
       {import.meta.env.DEV && <details className="studio-tools"><summary>Studio</summary><button onClick={() => preview('character')}>Character preview</button><button onClick={() => preview('crouch')}>Crouch preview</button></details>}
     </main>}
+    {screen === 'multiplayer' && <Suspense fallback={<div className="loading-screen" role="status">Opening multiplayer…</div>}><MultiplayerScreen canvasRef={canvasRef} captureRef={captureRef} pauseRef={onlinePauseRef} active={!gateVisible} settings={settings} onChangeSettings={setSettings} storageAvailable={storageAvailable} onBack={backToMenu} onActiveChange={setOnlineActive} /></Suspense>}
     {loadingVisible && <LoadingScreen arena={screen === 'loading' ? selectedArena : getArena('range')} progress={loading.progress} error={loadError} retry={() => screen === 'loading' ? enterPractice() : void ensureAssets().catch(() => undefined)} onBack={backToMenu} />}
     {assets && screen === 'customize' && <div className="app-surface"><CharacterCreator assets={assets} settings={settings} onChange={setSettings} storageAvailable={storageAvailable} onExit={backToMenu} /></div>}
     {screen === 'settings' && <div className="app-surface"><SettingsScreen active={!gateVisible} settings={settings} onChange={setSettings} storageAvailable={storageAvailable} onClose={backToMenu} /></div>}

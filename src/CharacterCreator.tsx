@@ -10,7 +10,7 @@ import {
   saveNewLook, restoreSavedLook, updateSavedLook, renameSavedLook, deleteSavedLook, undoDeleteSavedLook,
   type SavedLook, type Settings,
 } from './game/settings';
-import type { GameAssets } from './game/types';
+import type { GameAssets } from './game/assets';
 import './character-creator.css';
 
 type Section = AppearancePartId | 'outfits' | 'saved';

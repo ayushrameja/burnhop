@@ -1,0 +1,11 @@
+.git
+node_modules
+dist
+dist-server
+dist-tools
+test-results*
+playwright-report
+load-results
+.env*
+.colyseus-cloud.json
+*.log

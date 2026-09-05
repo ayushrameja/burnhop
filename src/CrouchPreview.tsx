@@ -3,7 +3,7 @@ import { calculateCharacterAim, calculateCharacterPose } from './game/character'
 import { drawDetailedCharacter } from './game/detailedCharacter';
 import type { DetailedAppearance } from './game/appearance';
 import { CHARACTER_SCALE } from './game/stance';
-import type { GameAssets } from './game/types';
+import type { GameAssets } from './game/assets';
 import './crouch-preview.css';
 
 type Facing = 'left' | 'right';

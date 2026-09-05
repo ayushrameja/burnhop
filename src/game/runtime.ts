@@ -9,7 +9,8 @@ import { FixedStepClock } from './timing';
 import { ActionInput } from './input';
 import { normalizeControls, type ControlsSettings } from './controls';
 import { DEFAULT_ZOOM_LEVEL, nextZoomLevel, type ZoomLevel } from './camera';
-import { type GameAssets, type GameEvent, type HudState, type InputCommand, type Vec2, type WorldState } from './types';
+import type { GameAssets } from './assets';
+import { type GameEvent, type HudState, type InputCommand, type Vec2, type WorldState } from './types';
 
 interface RuntimeCallbacks { onHud: (hud: HudState) => void; onPause: () => void; onPerformance?: (fps: number | null) => void; onZoom?: (zoom: ZoomLevel) => void }
 export interface RuntimeDiagnostics {

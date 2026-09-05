@@ -36,7 +36,7 @@ test('scenic entry opens only the fullscreen main menu; practice alone captures 
   await gate.getByRole('button', { name: 'Enter game', exact: true }).click();
   await expect(gate).not.toBeVisible();
   await expect(page.getByTestId('menu-screen')).toBeVisible();
-  await expect(page.getByRole('button', { name: /Multiplayer.*coming soon/i })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Multiplayer', exact: true })).toBeEnabled();
   await expect(page.getByRole('button', { name: /Enter game|Play windowed|Resume windowed/ })).toHaveCount(0);
   expect(await fixtureState(page)).toMatchObject({ fullscreen: true, locked: false, keyboard: true });
   expect((await fixtureState(page)).calls.filter(call => call === 'pointerlock')).toHaveLength(0);
