@@ -86,7 +86,7 @@ for (const mouth of mouths) {
     await expect(page.getByTestId('arena-name')).toHaveText('Outpost');
     expectClear(await player(page));
     await page.keyboard.press('Tab');
-    await expect(page.getByTestId('zoom-level')).toHaveText('3x');
+    await expect(page.getByTestId('zoom-level')).toHaveText('View range 1x');
     await crouch(page);
     await walkTo(page, mouth.lip);
     const underLip = await player(page);

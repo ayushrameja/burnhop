@@ -1,3 +1,4 @@
+import { createWeapon } from '../game/weapons';
 import { describe, expect, it } from 'vitest';
 import { Reconciler, type InputHandle } from '@colyseus/sdk';
 import { DEFAULT_APPEARANCE } from '../game/appearance';
@@ -42,7 +43,7 @@ describe('Colyseus full-state prediction', () => {
     stepPredictedActor(authoritative, first, arena);
     authoritative.x += 19; authoritative.fuel = 37; authoritative.fuelDelayTicks = 11;
     authoritative.coyoteTicks = 4; authoritative.jumpBufferTicks = 2;
-    authoritative.weapon = { ammo: 7, reloadTicks: 24, cooldownTicks: 3 };
+    authoritative.weapon = { ...createWeapon('pistol'), ammo: 7, reloadTicks: 24, cooldownTicks: 3 };
     authoritative.thrustLatched = true;
     syncPlayerWire(source, authoritative);
     const expected = cloneActor(authoritative); stepPredictedActor(expected, second, arena);

@@ -27,9 +27,9 @@ try {
   await expect(canvas).toHaveCSS('cursor', 'none');
   await page.mouse.down({ button: 'right' });
   await page.waitForTimeout(250);
-  await expect(ammo).toHaveText('30');
+  await expect(ammo).toHaveText('12');
   await page.mouse.down({ button: 'left' });
-  await expect(ammo).not.toHaveText('30');
+  await expect(ammo).not.toHaveText('12');
   await page.mouse.up({ button: 'right' });
   const ammoAfterRightRelease = Number(await ammo.innerText());
   await expect.poll(async () => Number(await ammo.innerText())).toBeLessThan(ammoAfterRightRelease);

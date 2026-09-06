@@ -104,9 +104,12 @@ test('both crouch keys preserve planted feet and clear after release, blur, and 
 
 test('crouch walking slows the player while firing and aiming stay aligned with the lowered weapon', async ({ page }) => {
   await enter(page);
-  // Keep the spawn target visible while checking crouched firing.
-  await page.keyboard.press('Tab');
-  await expect(page.getByTestId('zoom-level')).toContainText('3x');
+  // The stance/aim check needs the distant target visible; equip a rifle with the wider view.
+  await page.keyboard.press('Escape');
+  await page.getByRole('combobox',{name:'Practice weapon',exact:true}).selectOption('m416');
+  await page.getByRole('button',{name:'Resume',exact:true}).click();
+  for(let i=0;i<3;i++)await page.keyboard.press('Tab');
+  await expect(page.getByTestId('zoom-level')).toContainText('2.5x');
   const standingOrigin = await checkStationaryOrigin(page);
   await page.keyboard.down('KeyS');
   await stance(page, 1);

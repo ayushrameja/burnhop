@@ -217,6 +217,7 @@ export default function EntryLandscape({ reducedMotion }: EntryLandscapeProps) {
     let animation = 0;
     let elapsed = 0;
     let previousFrame: number | null = null;
+    let lastDraw = -Infinity;
     let disposed = false;
 
     const draw = () => {
@@ -273,7 +274,7 @@ export default function EntryLandscape({ reducedMotion }: EntryLandscapeProps) {
       if (disposed || document.hidden || reducedMotion) return;
       if (previousFrame !== null) elapsed += Math.min(now - previousFrame, 100);
       previousFrame = now;
-      draw();
+      if (now - lastDraw >= 1000 / 30 - .5) { draw(); lastDraw = now; }
       animation = requestAnimationFrame(animate);
     };
 

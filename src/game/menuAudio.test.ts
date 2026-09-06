@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultAudioSettings } from './audioSettings';
 import { MenuAudio } from './menuAudio';
+import { createDanceBuffer, DANCE_BEATS, DANCE_BPM } from './audioSynthesis';
 
 const media: FakeAudio[] = [];
 const contexts: FakeContext[] = [];
@@ -57,6 +58,21 @@ class FakeContext {
     return oscillator;
   });
   constructor() { contexts.push(this); }
+}
+
+class DanceContext extends FakeContext {
+  sampleRate = 22050;
+  buffers: AudioBuffer[] = [];
+  sources: { buffer: AudioBuffer | null; loop: boolean; start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>; connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }[] = [];
+  createBuffer(_channels: number, length: number, sampleRate: number) {
+    const data = new Float32Array(length);
+    const buffer = { duration: length / sampleRate, getChannelData: () => data } as unknown as AudioBuffer;
+    this.buffers.push(buffer); return buffer;
+  }
+  createBufferSource() {
+    const source = { buffer: null as AudioBuffer | null, loop: false, start: vi.fn(), stop: vi.fn(), connect: vi.fn(), disconnect: vi.fn() };
+    this.sources.push(source); return source;
+  }
 }
 
 function deferred() {
@@ -313,5 +329,36 @@ describe('menu audio lifecycle', () => {
       unavailable.playClick();
       unavailable.destroy();
     }).not.toThrow();
+  });
+
+  it('starts the original dance loop only after a gesture and retains its beat through menu navigation', async () => {
+    vi.stubGlobal('AudioContext', DanceContext);
+    audio.setDanceActive(true); audio.setMusicActive(true);
+    expect(contexts).toHaveLength(0); expect(audio.getDanceTime()).toBeNull();
+    audio.unlock(); await settle();
+    const context = contexts[0] as DanceContext;
+    expect(media).toHaveLength(0);
+    expect(context.sources).toHaveLength(1); expect(context.sources[0].loop).toBe(true);
+    expect(context.buffers[0].duration).toBeCloseTo(DANCE_BEATS * 60 / DANCE_BPM, 3);
+    context.currentTime = 1.5; expect(audio.getDanceTime()).toBe(1.5);
+    audio.unlock(); expect(context.sources).toHaveLength(1);
+    audio.setVisible(false); expect(context.sources[0].stop).toHaveBeenCalledOnce();
+    context.currentTime = 5; audio.setVisible(true);
+    expect(context.sources).toHaveLength(2); expect(context.sources[1].start).toHaveBeenCalledWith(0, 1.5);
+    expect(audio.getDanceTime()).toBe(1.5);
+    audio.setMusicActive(false); expect(audio.getDanceTime()).toBeNull();
+    audio.setMusicActive(true); expect(context.buffers).toHaveLength(1);
+    audio.setMuted(true); expect(context.sources.at(-1)!.stop).toHaveBeenCalledOnce();
+  });
+
+  it('generates a reproducible 16-beat percussion loop with headroom and a quiet seam', () => {
+    const context = new DanceContext() as unknown as AudioContext;
+    const first = createDanceBuffer(context).getChannelData(0), second = createDanceBuffer(context).getChannelData(0);
+    expect(first.every(Number.isFinite)).toBe(true);
+    let peak = 0, energy = 0;
+    for (let i = 0; i < first.length; i++) { peak = Math.max(peak, Math.abs(first[i])); energy += first[i] ** 2;
+      if (i % 997 === 0) expect(first[i]).toBe(second[i]); }
+    expect(peak).toBeLessThan(.75); expect(Math.sqrt(energy / first.length)).toBeGreaterThan(.04);
+    expect(Math.abs(first[0] - first.at(-1)!)).toBeLessThan(.01);
   });
 });

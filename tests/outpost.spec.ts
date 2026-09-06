@@ -49,7 +49,7 @@ test('Outpost selection loads its real geometry and supports movement, combat, p
   await expectArena(page, outpost, 'Outpost');
   await page.keyboard.press('Tab');
   await page.keyboard.press('Tab');
-  await expect(page.getByTestId('zoom-level')).toHaveText('5x');
+  await expect(page.getByTestId('zoom-level')).toContainText('1x');
   await ticks(page, 18);
   await page.screenshot({ path: `${screenshots}/gameplay.png` });
 
@@ -77,10 +77,10 @@ test('Outpost selection loads its real geometry and supports movement, combat, p
   await page.mouse.up();
   await page.keyboard.up('Space');
   expect((await snapshot(page)).shotsFired).toBeGreaterThan(0);
-  expect((await snapshot(page)).player.weapon.ammo).toBeLessThan(30);
+  expect((await snapshot(page)).player.weapon.ammo).toBeLessThan(12);
   await page.keyboard.press('KeyR');
   await page.waitForFunction(() => window.__BURNHOP__!.snapshot().player.weapon.reloadTicks > 0);
-  await page.waitForFunction(() => window.__BURNHOP__!.snapshot().player.weapon.ammo === 30);
+  await page.waitForFunction(() => window.__BURNHOP__!.snapshot().player.weapon.ammo === 12);
 
   await page.keyboard.press('Escape');
   await expect(page.locator('.pause-arena')).toHaveText('Outpost');
@@ -91,8 +91,8 @@ test('Outpost selection loads its real geometry and supports movement, combat, p
   await page.waitForFunction(() => window.__BURNHOP__!.metrics().running);
   await expectArena(page, outpost, 'Outpost');
   expect((await snapshot(page)).shotsFired).toBe(0);
-  expect((await snapshot(page)).player.weapon.ammo).toBe(30);
-  await expect(page.getByTestId('zoom-level')).toHaveText('5x');
+  expect((await snapshot(page)).player.weapon.ammo).toBe(12);
+  await expect(page.getByTestId('zoom-level')).toContainText('1x');
   await expect(page.getByRole('alert')).toHaveCount(0);
   expect(errors).toEqual([]);
 });

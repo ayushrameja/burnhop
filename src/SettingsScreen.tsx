@@ -23,17 +23,19 @@ const TABS: { id: SettingsTab; label: string; number: string }[] = [
 ];
 const AUDIO_CHANNELS: { id: keyof AudioSettings; label: string; description: string }[] = [
   { id: 'masterVolume', label: 'Master volume', description: 'Overall level for all music and effects.' },
-  { id: 'musicVolume', label: 'Menu music volume', description: 'The looping lo-fi track. Default: 10%.' },
+  { id: 'musicVolume', label: 'Menu music volume', description: 'Original percussion and menu music. Default: 10%.' },
   { id: 'weaponsVolume', label: 'Weapons & reload volume', description: 'Gunfire, magazine changes and weapon handling.' },
   { id: 'movementVolume', label: 'Movement & jetpack volume', description: 'Footsteps, jumps, landings and boot thrusters.' },
   { id: 'uiVolume', label: 'Menu effects volume', description: 'Hover and click feedback on menu buttons.' },
+  { id: 'feedbackVolume', label: 'Combat feedback volume', description: 'Kill confirmation, pickups, drop warning and low-health heartbeat.' },
 ];
 const DESCRIPTIONS: Record<ActionId, string> = {
   moveLeft: 'Movement mode applies to both directions.', moveRight: 'Steer your pilot to the right.',
   crouch: 'Stay low; stand when there is enough room.', jump: 'Jump, or tap before landing to hop.',
   jetpack: 'Power your boot thrusters in midair.', fire: 'Fire your equipped weapon.',
   aimSwitch: 'Switch between the aim line and pointer.', reload: 'Reload your weapon.',
-  zoom: '1× close → 3× medium → 5× wide.', pause: 'Escape always pauses. Add an alternate below.',
+  zoom: 'Cycle view range, limited by your equipped weapon.', pause: 'Escape always pauses. Add an alternate below.',
+  pickup: 'Take a nearby weapon as your main weapon.', pair: 'Pair a nearby pistol or SMG with a compatible weapon.', punch: 'Throw a short-range punch and push an opponent back.',
 };
 const actionLabel = (action: ActionId) => ACTIONS.find(item => item.id === action)?.label ?? action;
 const slotLabel = (slot: BindingSlot) => slot === 0 ? 'primary' : 'secondary';
@@ -246,7 +248,7 @@ export default function SettingsScreen({ settings, onChange, onClose, storageAva
                 </div>;
               })}
             </div>
-            <p className="settings-footnote"><kbd>ESC</kbd> always pauses and releases mouse capture. Jump, reload, zoom and pause activate once per press.</p>
+            <p className="settings-footnote"><kbd>ESC</kbd> always pauses and releases mouse capture. Jump, reload, view range, pickups, punch and pause activate once per press.</p>
           </>}
           {tab === 'aiming' && <>
             <div className="settings-panel-heading"><div><h2>Aiming</h2>
@@ -332,6 +334,17 @@ export default function SettingsScreen({ settings, onChange, onClose, storageAva
             <label className="settings-preference"><span><strong>Reduced motion</strong><small>Reduce camera effects, exhaust and menu animation.</small></span>
               <span className="settings-switch"><input type="checkbox" checked={settings.reducedMotion} aria-label="Reduced motion"
                 onChange={event => { const reducedMotion = event.target.checked; onChange(current => ({ ...current, reducedMotion })); }} /><span aria-hidden="true" /></span></label>
+            <div className="settings-audio-channel">
+              <label htmlFor="feedback-intensity"><strong>Screen feedback intensity</strong><small>Red damage and blue elimination edges. The aiming area stays clear.</small></label>
+              <div className="settings-audio-level"><input id="feedback-intensity" type="range" min="0" max="100" step="5" aria-label="Screen feedback intensity"
+                value={Math.round(settings.feedback.intensity * 100)} onChange={event => {
+                  const intensity = Number(event.target.value) / 100;
+                  onChange(current => ({ ...current, feedback: { ...current.feedback, intensity } }));
+                }} /><output htmlFor="feedback-intensity">{Math.round(settings.feedback.intensity * 100)}%</output></div>
+            </div>
+            <label className="settings-preference"><span><strong>Low-health heartbeat</strong><small>A quiet pulse below 25 health; stops when you recover above 30.</small></span>
+              <span className="settings-switch"><input type="checkbox" checked={settings.feedback.heartbeat} aria-label="Low-health heartbeat"
+                onChange={event => { const heartbeat = event.target.checked; onChange(current => ({ ...current, feedback: { ...current.feedback, heartbeat } })); }} /><span aria-hidden="true" /></span></label>
           </>}
         </div>
       </div>

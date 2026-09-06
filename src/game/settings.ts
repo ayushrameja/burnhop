@@ -2,6 +2,7 @@ import { DEFAULT_APPEARANCE, normalizeAppearance, type ClothingColorId, type Det
 import { defaultControls, normalizeControls, type ControlsSettings } from './controls';
 import { defaultAudioSettings, normalizeAudioSettings, type AudioSettings } from './audioSettings';
 import { defaultGraphics, normalizeGraphics, type GraphicsSettings } from './graphics';
+import { defaultFeedbackSettings, normalizeFeedbackSettings, type FeedbackSettings } from './feedback';
 
 export const SETTINGS_VERSION = 3 as const;
 export const SETTINGS_STORAGE_KEY = 'burnhop-settings';
@@ -23,6 +24,7 @@ export interface Settings {
   controls: ControlsSettings;
   audio: AudioSettings;
   graphics: GraphicsSettings;
+  feedback: FeedbackSettings;
 }
 
 const LEGACY_COLOR_IDS: ReadonlyArray<ClothingColorId> = ['olive', 'sand', 'slate'];
@@ -34,7 +36,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function defaultSettings(defaultReducedMotion: boolean): Settings {
   return {
     version: SETTINGS_VERSION, appearance: { ...DEFAULT_APPEARANCE }, savedLooks: [],
-    muted: false, reducedMotion: defaultReducedMotion, controls: defaultControls(), audio: defaultAudioSettings(), graphics: defaultGraphics(),
+    muted: false, reducedMotion: defaultReducedMotion, controls: defaultControls(), audio: defaultAudioSettings(), graphics: defaultGraphics(), feedback: defaultFeedbackSettings(),
   };
 }
 
@@ -80,6 +82,7 @@ function decodeSettings(value: unknown, defaultReducedMotion: boolean): Settings
   if (value.version === SETTINGS_VERSION) next.controls = normalizeControls(value.controls);
   next.audio = normalizeAudioSettings(value.audio);
   next.graphics = normalizeGraphics(value.graphics);
+  next.feedback = normalizeFeedbackSettings(value.feedback);
   return next;
 }
 

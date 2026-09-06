@@ -1,4 +1,5 @@
 import { installCapture, openMenu, moveAim } from './helpers/capture';
+import { choosePracticeLoadout, cycleViewTo } from './helpers/combat';
 import { test, expect, type Page } from '@playwright/test';
 import { ZOOM_SCALES, type ZoomLevel } from '../src/game/camera';
 import { proposeBinding } from '../src/game/controls';
@@ -41,30 +42,21 @@ async function projectedPilotHeight(page: Page) {
   });
 }
 
-test('Tab cycles once per press without moving gameplay focus', async ({ page }) => {
+test('Tab respects pistol view and cycles rifle tiers once per press without moving focus', async ({ page }) => {
   await enter(page);
+  await page.keyboard.press('Tab');
   await expectZoom(page, 1);
-  const closePilot = await projectedPilotHeight(page);
-  expect(closePilot).toBeCloseTo(1.5);
+  expect(await projectedPilotHeight(page)).toBeCloseTo(1.5);
+  await choosePracticeLoadout(page, 'ak47');
   await page.keyboard.down('Tab');
-  await expectZoom(page, 3);
-  const originalPilot = await projectedPilotHeight(page);
-  expect(originalPilot).toBeCloseTo(1.1);
-  expect(originalPilot).toBeLessThan(closePilot);
-  await page.keyboard.down('Tab');
-  await page.keyboard.down('Tab');
-  await ticks(page, 3);
-  await expectZoom(page, 3);
+  await expectZoom(page, 1.5);
+  await page.keyboard.down('Tab'); await page.keyboard.down('Tab');
+  await ticks(page, 3); await expectZoom(page, 1.5);
   await expect(page.getByTestId('game-canvas')).toBeFocused();
   await page.keyboard.up('Tab');
-  for (const level of [5, 1, 3] as ZoomLevel[]) {
-    await page.keyboard.press('Tab');
-    await expectZoom(page, level);
-    if (level === 5) {
-      const widePilot = await projectedPilotHeight(page);
-      expect(widePilot).toBeCloseTo(0.75);
-      expect(widePilot).toBeLessThan(originalPilot);
-    }
+  for (const level of [2, 2.5, 1, 1.5] as ZoomLevel[]) {
+    await page.keyboard.press('Tab'); await expectZoom(page, level);
+    expect(await projectedPilotHeight(page)).toBeCloseTo(ZOOM_SCALES[level]);
     await expect(page.getByTestId('game-canvas')).toBeFocused();
   }
 });
@@ -72,7 +64,7 @@ test('Tab cycles once per press without moving gameplay focus', async ({ page })
 test('Escape still pauses from HUD focus after Tab is freed by remapping zoom', async ({ page }) => {
   await openMenu(page);
   await page.getByRole('button', { name: 'Settings & Controls', exact: true }).click();
-  await page.getByRole('button', { name: 'Change Cycle zoom primary binding', exact: true }).click();
+  await page.getByRole('button', { name: 'Change Cycle view range primary binding', exact: true }).click();
   await page.keyboard.press('KeyZ');
   await page.getByRole('button', { name: 'Back to menu', exact: true }).click();
   await startFromMenu(page);
@@ -131,33 +123,25 @@ test('left-mouse pause release cannot activate the new overlay but a fresh Resum
   await expect(page.getByTestId('game-canvas')).toBeFocused();
 });
 
-test('pause and restart preserve zoom while new practice sessions start at 1x', async ({ page }) => {
-  await enter(page);
-  await page.keyboard.press('Tab');
-  await page.keyboard.press('Tab');
-  await expectZoom(page, 5);
+test('pause preserves view, while restart restores the default pistol and close view', async ({ page }) => {
+  await enter(page); await choosePracticeLoadout(page, 'sniper'); await cycleViewTo(page, 4);
+  await expectZoom(page, 4);
   await page.keyboard.press('Escape');
   const resume = page.getByRole('button', { name: 'Resume', exact: true });
   await expect(resume).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(resume).not.toBeFocused();
-  await expectZoom(page, 5);
+  await page.keyboard.press('Tab'); await expect(resume).not.toBeFocused();
+  await expectZoom(page, 4);
   expect(await page.evaluate(() => window.__BURNHOP__!.metrics().running)).toBe(false);
-  await resume.click();
-  await ticks(page, 3);
-  await expectZoom(page, 5);
+  await resume.click(); await ticks(page, 3); await expectZoom(page, 4);
+  expect(await projectedPilotHeight(page)).toBeCloseTo(.75);
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Restart practice', exact: true }).click();
   await page.waitForFunction(() => window.__BURNHOP__!.metrics().running);
-  await expectZoom(page, 5);
-  expect(await projectedPilotHeight(page)).toBeCloseTo(0.75);
-  await page.keyboard.press('Tab');
   await expectZoom(page, 1);
+  expect(await page.evaluate(() => window.__BURNHOP__!.snapshot().player.weapon.weaponId)).toBe('pistol');
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Back to menu', exact: true }).click();
-  await expect(page.getByTestId('menu-screen')).toBeVisible();
-  await startFromMenu(page);
-  await expectZoom(page, 1);
+  await startFromMenu(page); await expectZoom(page, 1);
   expect(await projectedPilotHeight(page)).toBeCloseTo(1.5);
 });
 
@@ -201,6 +185,7 @@ test.describe('zoom on high density displays', () => {
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     await enter(page);
+    await choosePracticeLoadout(page, 'm416');
     const before = await page.evaluate(() => window.__BURNHOP__!.snapshot());
     await page.keyboard.down('KeyD');
     for (const viewport of [{ width: 1280, height: 800 }, { width: 1024, height: 768 }]) {
@@ -208,7 +193,7 @@ test.describe('zoom on high density displays', () => {
       const box = (await page.getByTestId('game-canvas').boundingBox())!;
       await moveAim(page, Math.round(box.x + box.width * .76), Math.round(box.y + box.height * .42));
       await page.mouse.down({ button: 'left' });
-      for (const level of [3, 5, 1] as ZoomLevel[]) {
+      for (const level of [1.5, 2, 2.5, 1] as ZoomLevel[]) {
         await page.keyboard.press('Tab');
         await expectZoom(page, level);
         await ticks(page, 3);

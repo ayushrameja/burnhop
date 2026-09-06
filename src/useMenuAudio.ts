@@ -1,9 +1,9 @@
-import { useEffect, useRef, type SyntheticEvent } from 'react';
+import { useCallback, useEffect, useRef, type SyntheticEvent } from 'react';
 import { MenuAudio } from './game/menuAudio';
 import type { AudioSettings } from './game/audioSettings';
 
 /** Shell-owned audio survives practice runtime creation and teardown. */
-export function useMenuAudio(muted: boolean, musicActive: boolean, volumes: AudioSettings) {
+export function useMenuAudio(muted: boolean, musicActive: boolean, volumes: AudioSettings, dance = false) {
   const audioRef = useRef<MenuAudio | null>(null);
   const keyboardFocus = useRef(false);
 
@@ -23,6 +23,8 @@ export function useMenuAudio(muted: boolean, musicActive: boolean, volumes: Audi
   useEffect(() => { audioRef.current?.setMuted(muted); }, [muted]);
   useEffect(() => { audioRef.current?.setVolumes(volumes); }, [volumes]);
   useEffect(() => { audioRef.current?.setMusicActive(musicActive); }, [musicActive]);
+  useEffect(() => { audioRef.current?.setDanceActive(dance); }, [dance]);
+  const getDanceTime = useCallback(() => audioRef.current?.getDanceTime() ?? null, []);
 
   const controlFor = (event: SyntheticEvent): HTMLElement | null => {
     if (!(event.target instanceof Element)) return null;
@@ -34,6 +36,7 @@ export function useMenuAudio(muted: boolean, musicActive: boolean, volumes: Audi
 
   return {
     unlock: () => { void audioRef.current?.unlock(); },
+    getDanceTime,
     handlers: {
       onPointerOverCapture: (event: React.PointerEvent<HTMLDivElement>) => {
         if (event.pointerType === 'touch') return;

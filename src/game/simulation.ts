@@ -1,6 +1,8 @@
-import { compileTerrain, moveAndCollide, rayRectDistance, raySolidDistance, rectOverlapsSolid, type CollisionSolid } from './collision';
+import { compileTerrain, moveAndCollide, raySolidDistance, rectOverlapsSolid, type CollisionSolid } from './collision';
 import { CHARACTER_SCALE, CROUCH_TRANSITION_SECONDS, getStanceHeight, getStanceWeaponOffset, STANDING_COLLISION_HEIGHT } from './stance';
-import type { Arena, GameEvent, InputCommand, PlayerState, Vec2, WorldState } from './types';
+import type { Arena, GameEvent, InputCommand, PlayerState, ShotEvent, Vec2, WeaponHand, WeaponState, WorldState } from './types';
+import { calculateDamage, isCloserHit, rayHitRegions, resolveMeleeTarget } from './combat';
+import { advanceWeaponTimers, cancelReload, cloneWeapon, createWeapon, DUAL_CONFIG, equippedWeapons, MELEE_CONFIG, WEAPON_HANDLING, WEAPONS, weaponRandom } from './weapons';
 
 /** All gameplay quantities use world pixels, seconds, or explicitly named ticks. */
 export const CONFIG = Object.freeze({
@@ -26,12 +28,13 @@ export const CONFIG = Object.freeze({
   fuelRegen: 30,
   fuelDelayTicks: 24,
   maxHealth: 100,
-  magazineSize: 30,
-  shotCooldownTicks: 6,
-  reloadTicks: 72,
-  shotDamage: 20,
-  shotRange: 1900,
-  muzzleLength: 28 * CHARACTER_SCALE,
+  // Legacy presentation callers use the default weapon; gameplay reads the catalog per instance.
+  magazineSize: WEAPONS.pistol.magazineSize,
+  shotCooldownTicks: WEAPONS.pistol.cooldownTicks,
+  reloadTicks: WEAPONS.pistol.reloadTicks,
+  shotDamage: WEAPONS.pistol.damage,
+  shotRange: WEAPONS.pistol.range,
+  muzzleLength: WEAPONS.pistol.muzzleLength,
   targetRespawnTicks: 120,
   hitFlashTicks: 8,
 });
@@ -44,7 +47,9 @@ export function createWorld(arena: Arena): WorldState {
       vx: 0, vy: 0, grounded: true, coyoteTicks: CONFIG.coyoteTicks, jumpBufferTicks: 0,
       aimAngle: 0, crouchAmount: 0, health: CONFIG.maxHealth, fuel: CONFIG.maxFuel,
       thrusting: false, thrustLatched: false, fuelDelayTicks: 0,
-      weapon: { ammo: CONFIG.magazineSize, reloadTicks: 0, cooldownTicks: 0 },
+      weapon: createWeapon('pistol', 'initial:player:pistol'), offhand: null,
+      equipTicks: 0, fireLockTicks: 0, fireHeldLast: false,
+      meleeWindupTicks: 0, meleeCooldownTicks: 0, meleeAimAngle: 0, meleeSequence: 0, impulseX: 0, impulseY: 0,
     },
     target: {
       id: 'target-1', ...arena.targetSpawn, width: CONFIG.bodyWidth, height: CONFIG.bodyHeight,
@@ -55,7 +60,7 @@ export function createWorld(arena: Arena): WorldState {
 }
 
 export function cloneWorld(state: WorldState): WorldState {
-  return { ...state, player: { ...state.player, weapon: { ...state.player.weapon } }, target: { ...state.target } };
+  return { ...state, player: cloneActor(state.player), target: { ...state.target } };
 }
 
 /** Releases persistent control intent when pausing or detaching an input source.
@@ -69,16 +74,18 @@ export function releaseActorInput(player: PlayerState): void {
   player.thrusting = false;
   player.thrustLatched = false;
   player.jumpBufferTicks = 0;
+  player.fireHeldLast = false;
 }
 
-export function getWeaponOrigin(player: PlayerState): Vec2 {
+export function getWeaponOrigin(player: PlayerState, hand: WeaponHand = 'main'): Vec2 {
   const offset = getStanceWeaponOffset(player.crouchAmount, Math.cos(player.aimAngle) >= 0 ? 1 : -1);
-  return { x: player.x + player.width / 2 + offset.x, y: player.y + player.height + offset.y };
+  return { x: player.x + player.width / 2 + offset.x, y: player.y + player.height + offset.y + (hand === 'offhand' ? 7 * CHARACTER_SCALE : 0) };
 }
 
-export function getMuzzlePosition(player: PlayerState): Vec2 {
-  const origin = getWeaponOrigin(player);
-  return { x: origin.x + Math.cos(player.aimAngle) * CONFIG.muzzleLength, y: origin.y + Math.sin(player.aimAngle) * CONFIG.muzzleLength };
+export function getMuzzlePosition(player: PlayerState, hand: WeaponHand = 'main'): Vec2 {
+  const origin = getWeaponOrigin(player, hand), weapon = hand === 'offhand' ? player.offhand ?? player.weapon : player.weapon;
+  const length = WEAPONS[weapon.weaponId].muzzleLength;
+  return { x: origin.x + Math.cos(player.aimAngle) * length, y: origin.y + Math.sin(player.aimAngle) * length };
 }
 
 export interface CompiledArena { readonly arena: Arena; readonly solids: readonly CollisionSolid[] }
@@ -103,12 +110,12 @@ export function compileArena(arena: Arena): CompiledArena {
 }
 
 export function cloneActor<T extends PlayerState>(player: T): T {
-  return { ...player, weapon: { ...player.weapon } };
+  return { ...player, weapon: cloneWeapon(player.weapon), offhand: player.offhand ? cloneWeapon(player.offhand) : null };
 }
 
 /** Restore every simulation field, including input latches and weapon timers. */
 export function restoreActor<T extends PlayerState>(player: T, snapshot: T): void {
-  Object.assign(player, snapshot, { weapon: { ...snapshot.weapon } });
+  Object.assign(player, snapshot, { weapon: cloneWeapon(snapshot.weapon), offhand: snapshot.offhand ? cloneWeapon(snapshot.offhand) : null });
 }
 
 export type ActorInput = Omit<InputCommand, 'tick' | 'actorId'>;
@@ -227,9 +234,11 @@ function updateMovement(p: PlayerState, command: ActorInput, solids: readonly Co
   // A jump starts faster than sustained flight; do not clamp its first frame.
   if (jetFraction > 0 && !jumpedThisTick) p.vy = Math.max(-CONFIG.maxRiseSpeed, p.vy);
 
-  const collisions = moveAndCollide(p, { x: p.vx * dt, y: p.vy * dt }, solids, { grounded: p.grounded && !p.thrusting });
-  if (collisions.hitX) p.vx = 0;
-  if (collisions.hitY) p.vy = 0;
+  const collisions = moveAndCollide(p, { x: (p.vx + p.impulseX) * dt, y: (p.vy + p.impulseY) * dt }, solids, { grounded: p.grounded && !p.thrusting });
+  if (collisions.hitX) { p.vx = 0; p.impulseX = 0; }
+  if (collisions.hitY) { p.vy = 0; p.impulseY = 0; }
+  p.impulseX = approach(p.impulseX, 0, MELEE_CONFIG.knockbackX * dt / MELEE_CONFIG.impulseDecaySeconds);
+  p.impulseY = approach(p.impulseY, 0, MELEE_CONFIG.knockbackY * dt / MELEE_CONFIG.impulseDecaySeconds);
   p.grounded = collisions.grounded;
   if (p.grounded) {
     p.thrustLatched = false; p.thrusting = false;
@@ -243,37 +252,70 @@ function updateMovement(p: PlayerState, command: ActorInput, solids: readonly Co
   }
 }
 
-function fireShot(state: WorldState, solids: readonly CollisionSolid[], events: GameEvent[]) {
-  const p = state.player, target = state.target;
-  const origin = getWeaponOrigin(p);
-  const direction = { x: Math.cos(p.aimAngle), y: Math.sin(p.aimAngle) };
-  let distance: number = CONFIG.shotRange;
+function fireShot(player: PlayerState, hand: WeaponHand, weapon: WeaponState, solids: readonly CollisionSolid[]): ShotEvent {
+  const config = WEAPONS[weapon.weaponId], dual = player.offhand !== null;
+  const origin = getWeaponOrigin(player, hand), shotCounter = ++weapon.shotCounter;
+  const spread = (config.spreadDegrees + (config.maxSpreadDegrees - config.spreadDegrees) * weapon.bloom)
+    * (1 - .25 * player.crouchAmount) * (player.grounded ? 1 : 1.5) * (dual ? DUAL_CONFIG.spreadMultiplier : 1);
+  const angle = player.aimAngle + (weapon.recoil + (weaponRandom(weapon.instanceId, shotCounter, 0) * 2 - 1) * spread) * Math.PI / 180;
+  const direction = { x: Math.cos(angle), y: Math.sin(angle) };
+  let distance = config.range;
+  let surface: ShotEvent['surface'];
   for (const solid of solids) {
     const collision = raySolidDistance(origin, direction, solid, distance);
-    if (collision !== null) distance = Math.min(distance, collision);
-  }
-  const targetDistance = target.health > 0 ? rayRectDistance(origin, direction, target, distance) : null;
-  // A tie belongs to cover. Casting from the hand also blocks a protruding muzzle.
-  const hit = targetDistance !== null && targetDistance < distance;
-  if (hit) distance = targetDistance;
-  const impact = { x: origin.x + direction.x * distance, y: origin.y + direction.y * distance };
-  const barrelOffset = distance < CONFIG.muzzleLength ? 0 : CONFIG.muzzleLength;
-  events.push({ type: 'shot', x: origin.x + direction.x * barrelOffset, y: origin.y + direction.y * barrelOffset, toX: impact.x, toY: impact.y, hit });
-  p.weapon.ammo--;
-  p.weapon.cooldownTicks = CONFIG.shotCooldownTicks;
-  state.shotsFired++;
-  if (hit) {
-    const damage = Math.min(CONFIG.shotDamage, target.health);
-    target.health -= damage;
-    target.hitTicks = CONFIG.hitFlashTicks;
-    state.hits++;
-    events.push({ type: 'hit', ...impact, damage });
-    if (target.health === 0) {
-      target.respawnTicks = CONFIG.targetRespawnTicks;
-      state.kills++;
-      events.push({ type: 'targetDeath', x: target.x + target.width / 2, y: target.y + target.height / 2 });
+    if (collision !== null && collision <= distance) {
+      distance = collision; surface = 'material' in solid ? solid.material : 'rock';
     }
   }
+  weapon.ammo--;
+  weapon.cooldownTicks = config.cooldownTicks * (dual ? DUAL_CONFIG.cooldownMultiplier : 1);
+  weapon.bloom = Math.min(1, weapon.bloom + 1 / WEAPON_HANDLING.bloomShots);
+  const random = weaponRandom(weapon.instanceId, shotCounter, 1);
+  // The AK wanders in both directions. Other weapons have a steadier, aim-relative upward kick.
+  const kick = config.recoilDegrees * (dual ? DUAL_CONFIG.recoilMultiplier : 1)
+    * (weapon.weaponId === 'ak47' ? (random < .5 ? -1 : 1) * (.65 + .35 * Math.abs(random * 2 - 1))
+      : -(Math.cos(player.aimAngle) >= 0 ? 1 : -1) * (.8 + .2 * random));
+  weapon.recoil = Math.max(-WEAPON_HANDLING.recoilCapDegrees, Math.min(WEAPON_HANDLING.recoilCapDegrees, weapon.recoil + kick));
+  const barrelOffset = distance < config.muzzleLength ? 0 : config.muzzleLength;
+  return { type: 'shot', weaponId: weapon.weaponId, hand, instanceId: weapon.instanceId, shotCounter,
+    originX: origin.x, originY: origin.y, directionX: direction.x, directionY: direction.y, range: config.range, distance,
+    x: origin.x + direction.x * barrelOffset, y: origin.y + direction.y * barrelOffset,
+    toX: origin.x + direction.x * distance, toY: origin.y + direction.y * distance, hit: false, ...(surface ? { surface } : {}) };
+}
+
+function applyPracticeCombat(state: WorldState, events: GameEvent[], solids: readonly CollisionSolid[]): void {
+  const confirmations: GameEvent[] = [];
+  for (const event of events) {
+    if (event.type === 'shot') state.shotsFired++;
+    if (state.target.health <= 0) continue;
+    let damage = 0, impact: Vec2 | null = null;
+    let hit: Extract<GameEvent, { type: 'hit' }> | null = null;
+    if (event.type === 'shot') {
+      const origin = { x: event.originX, y: event.originY }, direction = { x: event.directionX, y: event.directionY };
+      const limit = event.distance;
+      const contact = rayHitRegions(origin, direction, state.target, limit);
+      // Cover retains exact-distance ties, including a barrel protruding through a wall.
+      if (contact && isCloserHit(contact.distance, limit)) {
+        damage = calculateDamage(event.weaponId, contact.region, contact.distance);
+        impact = { x: origin.x + direction.x * contact.distance, y: origin.y + direction.y * contact.distance };
+        event.toX = impact.x; event.toY = impact.y; event.distance = contact.distance; event.hit = true; event.surface = 'body';
+        if (contact.distance < WEAPONS[event.weaponId].muzzleLength) { event.x = origin.x; event.y = origin.y; }
+        hit = { type: 'hit', ...impact, damage: 0, region: contact.region, weaponId: event.weaponId, hand: event.hand };
+      }
+    } else if (event.type === 'melee') {
+      impact = resolveMeleeTarget(event, { x: Math.cos(event.aimAngle), y: Math.sin(event.aimAngle) }, state.target, solids);
+      if (impact) { damage = MELEE_CONFIG.damage; hit = { type: 'hit', ...impact, damage: 0 }; }
+    }
+    if (!impact || !hit || damage <= 0) continue;
+    hit.damage = Math.min(damage, state.target.health);
+    state.target.health -= hit.damage; state.target.hitTicks = CONFIG.hitFlashTicks; state.hits++;
+    confirmations.push(hit);
+    if (state.target.health === 0) {
+      state.target.respawnTicks = CONFIG.targetRespawnTicks; state.kills++;
+      confirmations.push({ type: 'targetDeath', x: state.target.x + state.target.width / 2, y: state.target.y + state.target.height / 2 });
+    }
+  }
+  events.push(...confirmations);
 }
 
 /** Practice recovery is deterministic and keeps accumulated results and inventory. */
@@ -282,7 +324,7 @@ function recoverFallenPlayer(state: WorldState, arena: Arena): boolean {
   Object.assign(state.player, {
     ...arena.playerSpawn, vx: 0, vy: 0, height: CONFIG.bodyHeight, crouchAmount: 0,
     grounded: true, coyoteTicks: CONFIG.coyoteTicks, jumpBufferTicks: 0,
-    thrusting: false, thrustLatched: false,
+    thrusting: false, thrustLatched: false, impulseX: 0, impulseY: 0,
   });
   return true;
 }
@@ -305,43 +347,91 @@ export function stepSimulation(state: WorldState, command: InputCommand, arena: 
     updateMovement(state.player, command, solids, events);
     recovered = recoverFallenPlayer(state, arena);
   }
-  advanceWeapon(state.player, command, events, !recovered, () => fireShot(state, solids, events));
+  advanceCombat(state.player, command, events, !recovered, solids);
+  applyPracticeCombat(state, events, solids);
   state.tick++;
   return events;
 }
 
-function advanceWeapon(player: PlayerState, command: ActorInput, events: GameEvent[], active: boolean, fire: () => void): void {
-  const weapon = player.weapon;
-  weapon.cooldownTicks = Math.max(0, weapon.cooldownTicks - 1);
-  if (weapon.reloadTicks > 0 && --weapon.reloadTicks === 0) {
-    weapon.ammo = CONFIG.magazineSize;
-    events.push({ type: 'reloadEnd', ...getWeaponOrigin(player) });
+function reloadable(weapon: WeaponState): boolean {
+  return weapon.ammo < WEAPONS[weapon.weaponId].magazineSize && weapon.reserve !== 0;
+}
+function reloadEvent(type: 'reloadStart' | 'reloadEnd', player: PlayerState, hand: WeaponHand, weapon: WeaponState): GameEvent {
+  const cue = { ...getWeaponOrigin(player, hand), weaponId: weapon.weaponId, hand, instanceId: weapon.instanceId };
+  return type === 'reloadStart' ? { ...cue, type: 'reloadStart' } : { ...cue, type: 'reloadEnd' };
+}
+function beginNextReload(player: PlayerState, events: GameEvent[]): void {
+  if (equippedWeapons(player).some(({ weapon }) => weapon.reloadTicks > 0)) return;
+  for (const { hand, weapon } of equippedWeapons(player)) {
+    if (!weapon.reloadQueued) continue;
+    weapon.reloadQueued = false;
+    if (!reloadable(weapon)) continue;
+    weapon.reloadTicks = WEAPONS[weapon.weaponId].reloadTicks;
+    events.push(reloadEvent('reloadStart', player, hand, weapon));
+    break;
   }
-  if (active && command.reloadPressed && weapon.reloadTicks === 0 && weapon.ammo < CONFIG.magazineSize) {
-    weapon.reloadTicks = CONFIG.reloadTicks;
-    events.push({ type: 'reloadStart', ...getWeaponOrigin(player) });
+}
+function advanceReload(player: PlayerState, events: GameEvent[]): void {
+  const active = equippedWeapons(player).find(({ weapon }) => weapon.reloadTicks > 0);
+  if (active && --active.weapon.reloadTicks === 0) {
+    const capacity = WEAPONS[active.weapon.weaponId].magazineSize;
+    const amount = Math.min(capacity - active.weapon.ammo, active.weapon.reserve < 0 ? capacity : active.weapon.reserve);
+    active.weapon.ammo += amount;
+    if (active.weapon.reserve >= 0) active.weapon.reserve -= amount;
+    events.push(reloadEvent('reloadEnd', player, active.hand, active.weapon));
+    beginNextReload(player, events);
   }
-  if (active && command.fireHeld && weapon.reloadTicks === 0 && weapon.cooldownTicks === 0 && weapon.ammo > 0) fire();
+}
+function meleeEvent(type: 'meleeStart' | 'melee', player: PlayerState): GameEvent {
+  return { type, ...getWeaponOrigin(player), aimAngle: player.meleeAimAngle, sequence: player.meleeSequence,
+    range: MELEE_CONFIG.range, damage: MELEE_CONFIG.damage };
 }
 
-/** A single actor tick. Shots are intents clipped to terrain; only the match authority applies damage. */
+function advanceCombat(player: PlayerState, command: ActorInput, events: GameEvent[], active: boolean, solids: readonly CollisionSolid[]): void {
+  player.equipTicks = Math.max(0, player.equipTicks - 1);
+  player.fireLockTicks = Math.max(0, player.fireLockTicks - 1);
+  player.meleeCooldownTicks = Math.max(0, player.meleeCooldownTicks - 1);
+  const shooting = active && command.fireHeld && player.equipTicks === 0 && player.fireLockTicks === 0
+    && !equippedWeapons(player).some(({ weapon }) => weapon.reloadTicks > 0 || weapon.reloadQueued);
+  for (const { weapon } of equippedWeapons(player)) advanceWeaponTimers(weapon, shooting && weapon.ammo > 0);
+  advanceReload(player, events);
+  if (player.meleeWindupTicks > 0 && --player.meleeWindupTicks === 0 && active) events.push(meleeEvent('melee', player));
+  if (active && command.punchPressed && player.meleeCooldownTicks === 0 && player.equipTicks === 0) {
+    cancelReload(player);
+    player.meleeAimAngle = player.aimAngle; player.meleeSequence++;
+    player.meleeWindupTicks = MELEE_CONFIG.windupTicks;
+    player.meleeCooldownTicks = MELEE_CONFIG.cooldownTicks;
+    player.fireLockTicks = Math.max(player.fireLockTicks, MELEE_CONFIG.fireLockTicks);
+    events.push(meleeEvent('meleeStart', player));
+  }
+  if (active && command.reloadPressed && player.equipTicks === 0 && player.fireLockTicks === 0
+    && !equippedWeapons(player).some(({ weapon }) => weapon.reloadTicks > 0 || weapon.reloadQueued)) {
+    for (const { weapon } of equippedWeapons(player)) weapon.reloadQueued = reloadable(weapon);
+    beginNextReload(player, events);
+  }
+  const canFire = active && command.fireHeld && player.equipTicks === 0 && player.fireLockTicks === 0
+    && !equippedWeapons(player).some(({ weapon }) => weapon.reloadTicks > 0 || weapon.reloadQueued);
+  if (canFire) {
+    if (!player.fireHeldLast && player.offhand && player.weapon.ammo > 0 && player.offhand.ammo > 0) {
+      const interval = Math.min(WEAPONS[player.weapon.weaponId].cooldownTicks, WEAPONS[player.offhand.weaponId].cooldownTicks)
+        * DUAL_CONFIG.cooldownMultiplier;
+      player.offhand.cooldownTicks = Math.max(player.offhand.cooldownTicks, Math.floor(interval / 2));
+    }
+    for (const { hand, weapon } of equippedWeapons(player)) {
+      if (weapon.cooldownTicks === 0 && weapon.ammo > 0) events.push(fireShot(player, hand, weapon, solids));
+      else if (!player.fireHeldLast && weapon.ammo === 0) events.push({ type: 'dryfire', ...getWeaponOrigin(player, hand),
+        weaponId: weapon.weaponId, hand, instanceId: weapon.instanceId });
+    }
+  }
+  // A held trigger resumes with a fresh stagger after any complete equipment/reload/melee lock.
+  player.fireHeldLast = canFire;
+}
+
+/** Shared deterministic actor step: presentation may predict intents; only authority resolves hits. */
 export function stepActor(player: PlayerState, command: ActorInput, arena: CompiledArena): GameEvent[] {
   const events: GameEvent[] = [];
   if (player.health <= 0) return events;
   updateMovement(player, command, arena.solids, events);
-  advanceWeapon(player, command, events, true, () => {
-    const origin = getWeaponOrigin(player);
-    const direction = { x: Math.cos(player.aimAngle), y: Math.sin(player.aimAngle) };
-    let distance: number = CONFIG.shotRange;
-    for (const solid of arena.solids) {
-      const collision = raySolidDistance(origin, direction, solid, distance);
-      if (collision !== null) distance = Math.min(distance, collision);
-    }
-    const barrelOffset = distance < CONFIG.muzzleLength ? 0 : CONFIG.muzzleLength;
-    events.push({ type: 'shot', x: origin.x + direction.x * barrelOffset, y: origin.y + direction.y * barrelOffset,
-      toX: origin.x + direction.x * distance, toY: origin.y + direction.y * distance, hit: false });
-    player.weapon.ammo--;
-    player.weapon.cooldownTicks = CONFIG.shotCooldownTicks;
-  });
+  advanceCombat(player, command, events, true, arena.solids);
   return events;
 }

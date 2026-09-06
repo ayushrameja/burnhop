@@ -1,4 +1,4 @@
-import type { Vec2 } from './types';
+import type { Vec2, WeaponId } from './types';
 import { clampCrouchAmount, getStanceBodyOffset } from './stance';
 
 export interface CharacterPose {
@@ -16,6 +16,13 @@ export interface CharacterPose {
   recoil?: number;
   /** Simulation-driven weapon reload, 0..1; undefined or -1 is the ready pose. */
   reloadProgress?: number;
+  weaponId?: WeaponId;
+  offhandWeaponId?: WeaponId;
+  offhandReloadProgress?: number;
+  offhandRecoil?: number;
+  /** Cycles of an unarmed dance; used only by the entry illustration. */
+  danceBeat?: number;
+  meleeProgress?: number;
   hit?: boolean;
   target?: boolean;
   time?: number;

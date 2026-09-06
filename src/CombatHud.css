@@ -54,10 +54,25 @@
 .ammo-state { color: var(--combat-warning); font: 600 8px/1 var(--mono); letter-spacing: .35px; text-align: right; }
 .ammo-progress { height: 3px; margin-top: 7px; background: #ffffff1c; }
 .ammo-progress > div { height: 100%; background: #e0e6df; transition: width .1s linear; }
-.burnhop-ammo-hud[data-reloading=true] .ammo-progress > div,
-.burnhop-ammo-hud[data-ammo-warning=true] .ammo-progress > div { background: var(--combat-warning); }
-.burnhop-ammo-hud[data-ammo-warning=true] .ammo-rounds { color: var(--combat-warning); }
-.burnhop-ammo-hud[data-reloading=true] .ammo-rounds { color: #c2c9c8; }
+.ammo-row[data-reloading=true] .ammo-progress > div,
+.ammo-row[data-ammo-warning=true] .ammo-progress > div { background: var(--combat-warning); }
+.ammo-row[data-ammo-warning=true] .ammo-rounds { color: var(--combat-warning); }
+.ammo-row[data-reloading=true] .ammo-rounds { color: #c2c9c8; }
+.ammo-row + .ammo-row { margin-top: 12px; padding-top: 10px; border-top: 1px solid #ffffff26; }
+.ammo-reserve { padding-left: 8px; border-left: 1px solid #ffffff24; text-align: center; }
+.ammo-reserve b { display: block; color: var(--combat-cyan); font: 500 20px/1 var(--display); }
+.ammo-reserve small { display: block; margin-top: 4px; color: var(--combat-muted); font: 400 6px/1 var(--mono); letter-spacing: .2px; }
+.ammo-magazine { gap: 7px; }
+.ammo-rounds { font-size: 48px; }
+.ammo-capacity { min-width: 32px; }
+.ammo-capacity > span { font-size: 22px; }
+.combat-hud.burnhop-ammo-hud[data-dual=true] .ammo-rounds { font-size: 36px; }
+.combat-hud.burnhop-ammo-hud[data-dual=true] .ammo-heading { height: 19px; }
+.combat-hud.burnhop-ammo-hud[data-dual=true] .ammo-footer { margin-top: 6px; }
+.combat-pickup-prompt,.combat-sniper-warning { position: absolute; left: 50%; transform: translateX(-50%); pointer-events: none; color: #f5f3e9; background: #11191ee8; border: 1px solid #94b8a76b; font: 600 11px/1.5 var(--mono); letter-spacing: .3px; text-align: center; padding: 8px 15px; border-radius: 3px; max-width: calc(100% - 32px); }
+.combat-pickup-prompt { bottom: max(50px, calc(env(safe-area-inset-bottom) + 18px)); box-shadow: inset 0 -2px #76e1e2; }
+.combat-sniper-warning { top: max(72px, calc(env(safe-area-inset-top) + 48px)); border-color: #eac581a6; color: #ffe0a2; }
+.combat-sniper-warning > span { display: inline-block; margin-right: 9px; font-size: 16px; }
 
 @media (min-width: 1900px) and (min-height: 800px) {
   .pilot-hud { transform: scale(1.25); transform-origin: bottom left; }
@@ -95,6 +110,19 @@
   .ammo-weapon-name { font-size: 8px; letter-spacing: .3px; }
   .ammo-state { font-size: 8px; letter-spacing: 0; }
   .ammo-progress { margin-top: 5px; height: 3px; }
+  .ammo-magazine { gap: 4px; }
+  .ammo-rounds { font-size: 32px; }
+  .ammo-divider { font-size: 20px; }
+  .ammo-capacity { min-width: 23px; }
+  .ammo-capacity > span { font-size: 17px; }
+  .ammo-capacity small { font-size: 5px; }
+  .ammo-reserve { padding-left: 5px; }
+  .ammo-reserve b { font-size: 15px; }
+  .ammo-reserve small { font-size: 5px; }
+  .combat-hud.burnhop-ammo-hud[data-dual=true] .ammo-rounds { font-size: 32px; }
+  .ammo-row + .ammo-row { margin-top: 9px; padding-top: 7px; }
+  .combat-pickup-prompt { bottom: 245px; font-size: 9px; padding: 6px 10px; width: max-content; }
+  .combat-sniper-warning { top: 64px; font-size: 9px; }
 }
 
 @media (max-width: 359px) {
@@ -105,7 +133,7 @@
   .pilot-fuel-amount b { font-size: 31px; }
   .combat-hud.burnhop-ammo-hud { right: 10px; width: 139px; padding-inline: 9px; }
   .ammo-weapon-icon { width: 44px; }
-  .ammo-rounds { font-size: 40px; }
+  .ammo-rounds { font-size: 32px; }
 }
 
 [data-reduced-motion=true] .ammo-progress > div { transition: none; }

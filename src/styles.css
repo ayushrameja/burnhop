@@ -164,25 +164,47 @@ kbd { font: 10px var(--mono); display: inline-flex; align-items: center; justify
 /* The atmospheric entrance is separate from the fullscreen main menu. */
 .game-content[inert] { height: 100dvh; overflow: hidden; visibility: hidden; }
 .game-shell:has(> .fullscreen-gate) { height: 100dvh; overflow: hidden; }
-.fullscreen-gate { position: fixed; inset: 0; z-index: 30; min-height: 100dvh; overflow: auto; background: #080e17; display: flex; align-items: flex-end; justify-content: center; padding: 40px 24px max(14vh, 44px); }
+.fullscreen-gate { position: fixed; inset: 0; z-index: 30; min-height: 100dvh; overflow: auto; background: #10181c; display: flex; align-items: center; padding: 50px max(40px, 8vw); }
 .entry-landscape { position: fixed; inset: 0; display: block; width: 100%; height: 100%; }
-.entry-action { position: relative; width: min(370px, 100%); display: flex; flex-direction: column; align-items: center; text-align: center; }
-.entry-button { display: inline-flex; align-items: center; justify-content: center; gap: 16px; min-width: 244px; min-height: 60px; padding: 17px 30px; background: #111d2bb3; border: 1px solid #c6d2df66; color: #ecf1f5; backdrop-filter: blur(10px); font: 600 21px var(--display); letter-spacing: 1.7px; text-transform: uppercase; transition: background .2s, border-color .2s; }
-.entry-button > svg { width: 19px; height: 19px; color: #cbd7e5; }
-.entry-button:hover { background: #1c2d3ee6; border-color: #d5e2eecc; }
+.entry-shade { position: fixed; inset: 0; background: linear-gradient(90deg, #0a111bea 0%, #0a111b90 40%, #0a111b00 70%); pointer-events: none; }
+.entry-dancer { position: fixed; inset: 0; display: block; width: 100%; height: 100%; pointer-events: none; }
+.entry-action { position: relative; width: min(580px, 54%); display: flex; flex-direction: column; align-items: flex-start; text-align: left; }
+.entry-eyebrow { display: flex; align-items: center; gap: 12px; color: #b8c4c7; font: 500 10px var(--mono); letter-spacing: 1.7px; margin: 0 0 20px; }
+.entry-eyebrow .burnhop-mark { color: var(--amber); width: 24px; height: 24px; }
+.entry-wordmark { font: 900 clamp(76px, 10vw, 152px)/.8 var(--display); letter-spacing: -2px; margin: 0; color: var(--ink); }
+.entry-wordmark span { color: var(--amber); }
+.entry-tagline { color: #c0c8cb; font: 500 clamp(18px, 2vw, 25px)/1.3 'Barlow', sans-serif; margin: 27px 0 42px; }
+.entry-button { display: inline-flex; align-items: center; justify-content: space-between; gap: 30px; min-width: 272px; min-height: 64px; padding: 18px 26px; background: var(--amber); border: 1px solid #ff7562; color: #fff6ef; font: 700 23px var(--display); letter-spacing: 1.6px; text-transform: uppercase; transition: background .2s, border-color .2s; }
+.entry-button > svg { width: 20px; height: 20px; color: #fff6ef; }
+.entry-button:hover { background: #fa604d; border-color: #ff9685; }
 .entry-button:focus-visible { outline: 1px solid #d5e2ee; outline-offset: 6px; }
 .entry-button:disabled { opacity: .7; }
+.entry-sound { display: flex; align-items: center; gap: 10px; min-height: 44px; margin-top: 18px; padding: 7px 0; color: #aebdc4; font: 500 9px var(--mono); letter-spacing: .8px; background: transparent; }
+.entry-sound svg { width: 18px; height: 18px; }
+.entry-sound:hover { color: var(--ink); }
+.practice-loadout { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0 0 22px; }
+.practice-loadout label { display: flex; flex-direction: column; gap: 7px; font: 500 10px var(--mono); color: var(--muted); }
+.practice-loadout select { min-height: 38px; width: 100%; border: 1px solid var(--line); border-radius: 0; background: var(--surface); color: var(--ink); padding: 6px 9px; font: 500 14px 'Barlow', sans-serif; }
+.practice-loadout select:disabled { opacity: .45; }
 .gate-note { margin: 19px 0 0; color: #bdc9d5; font-size: 12px; line-height: 1.5; letter-spacing: .2px; }
 .gate-error { margin: 18px 0 0; font-size: 13px; line-height: 1.6; color: #f4beb3; background: #0c1420b3; padding: 12px 16px; }
 .multiplayer-button { display: flex; align-items: center; justify-content: space-between; gap: 18px; width: 100%; padding: 19px 4px 20px; margin: 7px 0 7px; background: transparent; border-bottom: 1px solid #ffffff1a; color: #aaaeb0; opacity: 1 !important; text-align: left; font: 600 20px var(--display); letter-spacing: .5px; }
 .multiplayer-button small { flex-shrink: 0; font: 8px var(--mono); letter-spacing: .5px; padding: 6px 7px; border: 1px solid #ffffff26; color: #959b9f; }
 .menu-footer { justify-content: flex-end; left: auto; }
 @media (max-width: 700px) {
-  .fullscreen-gate { padding-bottom: max(12vh, 48px); }
+  .fullscreen-gate { align-items: flex-end; justify-content: center; padding: 38px 24px; }
+  .entry-shade { background: linear-gradient(0deg, #09121af5, #09121a25 60%, #09121a10); }
+  .entry-action { width: 100%; align-items: center; text-align: center; }
+  .entry-eyebrow { font-size: 8px; gap: 8px; margin-bottom: 12px; }
+  .entry-eyebrow .burnhop-mark { width: 18px; height: 18px; }
+  .entry-wordmark { font-size: clamp(64px, 17vw, 105px); letter-spacing: -.8px; }
+  .entry-tagline { font-size: 17px; margin: 15px 0 22px; }
   .entry-button { min-width: 228px; font-size: 19px; }
+  .entry-sound { margin-top: 8px; }
   .multiplayer-button { font-size: 19px; padding-block: 16px; }
 }
-@media (max-height: 520px) { .fullscreen-gate { padding-bottom: 35px; } .gate-note { margin-top: 12px; } }
+@media (max-height: 520px) and (min-width: 701px) { .fullscreen-gate { padding-block: 24px; } .entry-wordmark { font-size: 86px; } .entry-tagline { margin-block: 20px; } .entry-eyebrow { margin-bottom: 12px; } .entry-sound { margin-top: 7px; } .gate-note { margin-top: 8px; } }
+@media (max-height: 650px) and (max-width: 700px) { .fullscreen-gate { padding-block: 18px; } .entry-dancer { transform: translateY(-7%); } .entry-wordmark { font-size: 65px; } .entry-eyebrow { margin-bottom: 8px; } .entry-tagline { margin-block: 10px 14px; } .entry-button { min-height: 52px; padding-block: 13px; } }
 
 .escape-hold-hint { display: inline-flex; gap: 5px; align-items: center; color: var(--muted); font: 10px var(--mono); }
 .escape-hold-hint kbd { font-size: 8px; margin-right: 0; }

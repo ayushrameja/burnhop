@@ -1,14 +1,17 @@
 import { defaultAudioSettings, normalizeAudioSettings, type AudioSettings } from './audioSettings';
-import { createSyntheticBuffer, type SyntheticSound } from './audioSynthesis';
-import { RELOAD_CUES } from './reload';
-import type { GameEvent } from './types';
+import { createSyntheticBuffer, weaponSoundId, type SyntheticSound } from './audioSynthesis';
+import { getReloadProgress, RELOAD_CUES } from './reload';
+import { lowHealthActive } from './feedback';
+import { WEAPONS } from './weapons';
+import type { GameEvent, WeaponState } from './types';
 
 export interface MovementAudioState {
   x: number; y: number; grounded: boolean; vx: number; vy: number; crouchAmount: number;
 }
 
-type Channel = 'weapons' | 'movement';
-type Voice = { source: AudioBufferSourceNode; gain: GainNode; filter?: BiquadFilterNode };
+type Channel = 'weapons' | 'movement' | 'feedback';
+type Voice = { source: AudioBufferSourceNode; gain: GainNode; filter?: BiquadFilterNode; panner?: StereoPannerNode;
+  priority: number; local: boolean; level: number; sound: SyntheticSound };
 type ActorSoundState = { movement: MovementAudioState | null; distance: number; stepIndex: number; shotIndex: number; reloadProgress: number; jet: Voice | null };
 const STEP_DISTANCE = Math.PI / 0.045; // Same alternating-foot cadence as the renderer.
 const SAMPLE_NAMES = [
@@ -41,6 +44,11 @@ export class GameAudio {
   private reloadProgress = -1;
   private actors = new Map<string, ActorSoundState>();
   private spatialVolume = 1;
+  private spatialPan = 0;
+  private spatialLocal = true;
+  private heartbeatActive = false;
+  private nextHeartbeat = 0;
+  private reloadTimelines = new Map<string, number>();
 
   async unlock(): Promise<void> {
     if (this.disposed) return;
@@ -58,7 +66,7 @@ export class GameAudio {
         this.limiter.release.value = 0.09;
         this.master.connect(this.limiter);
         this.limiter.connect(context.destination);
-        for (const channel of ['weapons', 'movement'] as const) {
+        for (const channel of ['weapons', 'movement', 'feedback'] as const) {
           const gain = context.createGain();
           gain.connect(this.master);
           this.channels[channel] = gain;
@@ -101,17 +109,19 @@ export class GameAudio {
     this.volumes = normalizeAudioSettings(settings);
     this.syncVolumes();
     if (this.volumes.masterVolume === 0 || this.volumes.movementVolume === 0) this.stopJet();
+    if (this.volumes.masterVolume === 0) this.stopVoices();
   }
 
   private syncVolumes(): void {
     if (this.master) this.master.gain.value = this.muted || this.paused || this.disposed ? 0 : this.volumes.masterVolume;
     if (this.channels.weapons) this.channels.weapons.gain.value = this.volumes.weaponsVolume;
     if (this.channels.movement) this.channels.movement.gain.value = this.volumes.movementVolume;
+    if (this.channels.feedback) this.channels.feedback.gain.value = this.volumes.feedbackVolume;
   }
 
   private canPlay(channel: Channel): boolean {
     return !this.disposed && !this.paused && !this.muted && this.context?.state === 'running'
-      && this.volumes.masterVolume > 0 && this.volumes[channel === 'weapons' ? 'weaponsVolume' : 'movementVolume'] > 0;
+      && this.volumes.masterVolume > 0 && this.volumes[channel === 'weapons' ? 'weaponsVolume' : channel === 'feedback' ? 'feedbackVolume' : 'movementVolume'] > 0;
   }
 
   private fallback(sound: SyntheticSound): AudioBuffer {
@@ -123,19 +133,39 @@ export class GameAudio {
     return buffer;
   }
 
-  private playSample(name: SampleName, fallback: SyntheticSound, channel: Channel, volume: number, rate = 1): void {
-    if (!this.canPlay(channel)) return;
+  /** Reserve four slots for local cues. Distant or low-priority tails yield first. */
+  private claimVoice(priority: number): boolean {
+    const remote = [...this.voices].filter(voice => !voice.local);
+    const crowded = this.voices.size >= 24 || (!this.spatialLocal && remote.length >= 20);
+    if (!crowded) return true;
+    const candidates = [...this.voices].filter(voice => (!this.spatialLocal ? !voice.local : true)
+      && (!voice.local || voice.priority <= priority));
+    candidates.sort((a, b) => Number(a.local) - Number(b.local) || a.priority - b.priority || a.level - b.level);
+    const victim = candidates[0];
+    if (!victim || (!this.spatialLocal && (victim.priority > priority || (victim.priority === priority && victim.level > this.spatialVolume)))) return false;
+    this.stopVoice(victim); return true;
+  }
+
+  private routeVoice(voice: Voice, channel: Channel): void {
+    // Mono remains a supported fallback for devices without a stereo panner.
+    if (typeof this.context?.createStereoPanner === 'function') {
+      voice.panner = this.context.createStereoPanner();
+      voice.panner.pan.value = this.spatialPan;
+      voice.gain.connect(voice.panner); voice.panner.connect(this.channels[channel]!);
+    } else voice.gain.connect(this.channels[channel]!);
+  }
+
+  private playSample(name: SampleName | null, fallback: SyntheticSound, channel: Channel, volume: number, rate = 1, priority = 2): void {
+    if (!this.canPlay(channel) || this.spatialVolume <= .001 || !this.claimVoice(priority)) return;
     const context = this.context!;
     let voice: Voice | null = null;
     try {
-      // Bound simultaneous tails during sustained fire or catch-up simulation ticks.
-      if (this.voices.size >= 24) this.stopVoice(this.voices.values().next().value!);
-      voice = { source: context.createBufferSource(), gain: context.createGain() };
-      voice.source.buffer = this.samples.get(name) ?? this.fallback(fallback);
+      voice = { source: context.createBufferSource(), gain: context.createGain(), priority, local: this.spatialLocal, level: this.spatialVolume, sound: fallback };
+      voice.source.buffer = (name ? this.samples.get(name) : undefined) ?? this.fallback(fallback);
       voice.source.playbackRate.value = rate;
       voice.gain.gain.value = volume * this.spatialVolume;
       voice.source.connect(voice.gain);
-      voice.gain.connect(this.channels[channel]!);
+      this.routeVoice(voice, channel);
       const activeVoice = voice;
       voice.source.onended = () => this.disconnectVoice(activeVoice);
       this.voices.add(voice);
@@ -147,11 +177,12 @@ export class GameAudio {
 
   setThrust(active: boolean): void {
     if (!active || !this.canPlay('movement')) { this.stopJet(); return; }
-    if (this.jet) return;
+    if (this.jet || !this.claimVoice(0)) return;
     const context = this.context!;
     let voice: Voice | null = null;
     try {
-      voice = { source: context.createBufferSource(), gain: context.createGain(), filter: context.createBiquadFilter() };
+      voice = { source: context.createBufferSource(), gain: context.createGain(), filter: context.createBiquadFilter(),
+        priority: 0, local: this.spatialLocal, level: this.spatialVolume, sound: 'jet' };
       voice.source.buffer = this.fallback('jet');
       voice.source.loop = true;
       voice.filter!.type = 'lowpass';
@@ -161,7 +192,7 @@ export class GameAudio {
       voice.gain.gain.setTargetAtTime(0.38 * this.spatialVolume, context.currentTime, 0.045);
       voice.source.connect(voice.filter!);
       voice.filter!.connect(voice.gain);
-      voice.gain.connect(this.channels.movement!);
+      this.routeVoice(voice, 'movement');
       const activeVoice = voice;
       voice.source.onended = () => this.disconnectVoice(activeVoice);
       this.voices.add(voice);
@@ -225,38 +256,103 @@ export class GameAudio {
     }
   }
 
+  /** Each physical weapon owns a cue ledger, including sequential dual reloads. */
+  updateWeaponReloads(actorId: string, weapon: WeaponState, offhand: WeaponState | null = null): void {
+    const retained = new Set<string>();
+    for (const equipped of [weapon, offhand]) {
+      if (!equipped) continue;
+      const key = `${actorId}:${equipped.instanceId}`;
+      retained.add(key);
+      const progress = getReloadProgress(equipped.reloadTicks, WEAPONS[equipped.weaponId].reloadTicks);
+      if (progress < 0) { this.reloadTimelines.set(key, -1); continue; }
+      if (this.disposed || this.paused) continue;
+      const last = this.reloadTimelines.get(key);
+      // First observation may be mid-reload after join/respawn; do not play its history.
+      if (last === undefined) { this.reloadTimelines.set(key, progress); continue; }
+      const previous = last < 0 || progress < last ? 0 : last;
+      this.reloadTimelines.set(key, progress);
+      for (const [stage, threshold] of Object.entries(RELOAD_CUES) as [keyof typeof RELOAD_CUES, number][]) {
+        if (previous < threshold && progress >= threshold) {
+          this.playSample(null, `reload-${equipped.weaponId}-${stage}`, 'weapons', .48, 1, 1);
+        }
+      }
+    }
+    for (const key of this.reloadTimelines.keys()) if (key.startsWith(`${actorId}:`) && !retained.has(key)) this.reloadTimelines.delete(key);
+  }
+
+  private localFeedback(sound: SyntheticSound, volume: number): void {
+    const saved = { volume: this.spatialVolume, pan: this.spatialPan, local: this.spatialLocal };
+    this.spatialVolume = 1; this.spatialPan = 0; this.spatialLocal = true;
+    this.playSample(null, sound, 'feedback', volume, 1, 4);
+    this.spatialVolume = saved.volume; this.spatialPan = saved.pan; this.spatialLocal = saved.local;
+  }
+  playKillConfirmation(): void { this.localFeedback('kill', .42); }
+  playPickup(sniper = false): void { this.localFeedback(sniper ? 'sniper-pickup' : 'pickup', sniper ? .44 : .3); }
+  playDropWarning(): void { this.localFeedback('drop-warning', .35); }
+
+  /** The runtime supplies live health; no timer can continue behind a paused match. */
+  setHeartbeat(active: boolean, health = 100): void {
+    this.heartbeatActive = active && lowHealthActive(health, this.heartbeatActive) && this.canPlay('feedback');
+    if (!this.heartbeatActive) {
+      this.nextHeartbeat = 0;
+      for (const voice of this.voices) if (voice.sound === 'heartbeat') this.stopVoice(voice);
+      return;
+    }
+    const now = this.context!.currentTime;
+    if (now >= this.nextHeartbeat) { this.localFeedback('heartbeat', .12); this.nextHeartbeat = now + 1; }
+  }
+
+  getDiagnostics() { return { voices: this.voices.size, remoteVoices: [...this.voices].filter(voice => !voice.local).length,
+    heartbeat: this.heartbeatActive, reloadTimelines: this.reloadTimelines.size }; }
+
   play(events: GameEvent[]): void {
     if (this.disposed || this.paused) return;
     for (const event of events) {
-      if (event.type === 'shot') this.playSample(`rifle-${this.shotIndex++ % 3 + 1}` as SampleName, 'rifle', 'weapons', 0.72, 0.98 + Math.random() * 0.04);
-      if (event.type === 'hit') this.playSample('impact-metal', 'impact', 'weapons', 0.22, 1.08);
-      if (event.type === 'targetDeath') this.playSample('land', 'land', 'weapons', 0.42);
+      if (event.type === 'shot') {
+        const weapon = weaponSoundId(event.weaponId);
+        if (weapon) this.playSample(null, `shot-${weapon}`, 'weapons', weapon === 'sniper' ? .85 : .72, .99 + (event.shotCounter % 3) * .01);
+        else this.playSample(`rifle-${this.shotIndex++ % 3 + 1}` as SampleName, 'rifle', 'weapons', .72, .98 + Math.random() * .04);
+        if (event.surface && event.surface !== 'body') {
+          this.playSample(event.surface === 'bunker' ? 'impact-metal' : null,
+            event.surface === 'wood' ? 'impact-wood' : event.surface === 'bunker' ? 'impact' : 'impact-rock', 'weapons', .14, 1, 1);
+        }
+      }
+      if (event.type === 'hit') this.playSample(null, event.weaponId ? 'impact-body' : 'punch-hit', 'weapons', .27, 1, 2);
+      if (event.type === 'meleeStart') this.playSample(null, 'punch-swing', 'weapons', .32, 1, 1);
+      if (event.type === 'dryfire') this.playSample(null, 'dry', 'weapons', .3, 1, 2);
       if (event.type === 'jump') this.playSample(`footstep-${this.stepIndex++ % 4 + 1}` as SampleName, 'footstep', 'movement', 0.26, 1.15);
       // Reload stages and impact-scaled landings are handled by their simulation updates.
     }
   }
 
   /** One audio context, independent footsteps/reload/jet state for each online actor. */
-  updateActor(id: string, state: MovementAudioState, reloadProgress: number, thrusting: boolean,
+  updateActor(id: string, state: MovementAudioState & { weapon?: WeaponState; offhand?: WeaponState | null }, reloadProgress: number, thrusting: boolean,
     events: GameEvent[], listener: { x: number; y: number }, local = false): void {
     if (this.disposed || this.paused) return;
     const practice: ActorSoundState = { movement: this.movement, distance: this.distance, stepIndex: this.stepIndex,
       shotIndex: this.shotIndex, reloadProgress: this.reloadProgress, jet: this.jet };
     const actor = this.actors.get(id) ?? { movement: null, distance: 0, stepIndex: 0, shotIndex: 0, reloadProgress: -1, jet: null };
     Object.assign(this, actor);
+    this.spatialLocal = local;
+    this.spatialPan = local ? 0 : Math.max(-.85, Math.min(.85, (state.x - listener.x) / 800));
     this.spatialVolume = local ? 1 : Math.max(0, 0.7 * (1 - Math.hypot(state.x - listener.x, state.y - listener.y) / 1500));
-    this.play(events); this.updateMovement(state); this.updateReload(reloadProgress); this.setThrust(thrusting && this.spatialVolume > 0);
+    this.play(events); this.updateMovement(state);
+    if (state.weapon) this.updateWeaponReloads(id, state.weapon, state.offhand); else this.updateReload(reloadProgress);
+    this.setThrust(thrusting && this.spatialVolume > 0);
     if (this.jet && this.context) this.jet.gain.gain.setTargetAtTime(0.38 * this.spatialVolume, this.context.currentTime, 0.05);
+    if (this.jet?.panner) this.jet.panner.pan.value = this.spatialPan;
     this.actors.set(id, { movement: this.movement, distance: this.distance, stepIndex: this.stepIndex,
       shotIndex: this.shotIndex, reloadProgress: this.reloadProgress, jet: this.jet });
-    Object.assign(this, practice); this.spatialVolume = 1;
+    Object.assign(this, practice); this.spatialVolume = 1; this.spatialPan = 0; this.spatialLocal = true;
   }
 
   retainActors(ids: ReadonlySet<string>): void {
     for (const [id, actor] of this.actors) if (!ids.has(id)) {
       if (actor.jet) this.stopVoice(actor.jet);
       this.actors.delete(id);
+      for (const key of this.reloadTimelines.keys()) if (key.startsWith(`${id}:`)) this.reloadTimelines.delete(key);
     }
+    for (const key of this.reloadTimelines.keys()) if (!ids.has(key.slice(0, key.indexOf(':')))) this.reloadTimelines.delete(key);
   }
 
   /** Cut every voice immediately; no scheduled Foley continues behind the pause screen. */
@@ -267,12 +363,14 @@ export class GameAudio {
     this.syncVolumes();
     this.stopVoices();
     this.actors.clear();
+    this.heartbeatActive = false; this.nextHeartbeat = 0;
   }
 
   private disconnectVoice(voice: Voice): void {
     voice.source.onended = null;
     voice.source.disconnect();
     voice.filter?.disconnect();
+    voice.panner?.disconnect();
     voice.gain.disconnect();
     this.voices.delete(voice);
     if (this.jet === voice) this.jet = null;
@@ -308,5 +406,6 @@ export class GameAudio {
     this.channels = {};
     this.samples.clear();
     this.synthesized.clear();
+    this.reloadTimelines.clear();
   }
 }

@@ -6,7 +6,9 @@ import CharacterPreview from './CharacterPreview';
 import MenuBackdrop from './MenuBackdrop';
 import ArenaSelector from './ArenaSelector';
 import CombatHud from './CombatHud';
+import CombatFeedback from './CombatFeedback';
 import EntryLandscape from './EntryLandscape';
+import DancePilot from './DancePilot';
 import FullscreenEscapeHold from './FullscreenEscapeHold';
 import KeyboardCaptureNotice from './KeyboardCaptureNotice';
 import SettingsScreen from './SettingsScreen';
@@ -19,6 +21,7 @@ import { loadGame } from './game/loading';
 import { arenaIdFromSearch, getArena, type ArenaDefinition, type ArenaId } from './game/arenas';
 import type { GameAssets } from './game/assets';
 import type { HudState } from './game/types';
+import { WEAPONS, type WeaponId } from './game/weapons';
 const MultiplayerScreen = lazy(() => import('./MultiplayerScreen'));
 import type { GameRuntime } from './game/runtime';
 
@@ -93,6 +96,7 @@ export default function App() {
   const [entered, setEntered] = useState(false);
   const [gatePending, setGatePending] = useState(false);
   const [gateError, setGateError] = useState<string | null>(null);
+  const [entrySoundStarted, setEntrySoundStarted] = useState(false);
   const gateVisible = !entered || !fullscreen;
   const gateVisibleRef = useRef(gateVisible);
   gateVisibleRef.current = gateVisible;
@@ -105,7 +109,7 @@ export default function App() {
   const resumeRef = useRef<HTMLButtonElement>(null);
   const launchRef = useRef<HTMLButtonElement>(null);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
-  const menuAudio = useMenuAudio(settings.muted, !gateVisible && screen !== 'practice' && screen !== 'loading' && screen !== 'multiplayer', settings.audio);
+  const menuAudio = useMenuAudio(settings.muted, gateVisible || (screen !== 'practice' && screen !== 'loading' && screen !== 'multiplayer'), settings.audio, true);
 
   const pause = useCallback(() => {
     generation.current++;
@@ -163,6 +167,7 @@ export default function App() {
     runtime?.setAppearance(settings.appearance);
     runtime?.setMuted(settings.muted);
     runtime?.setAudioVolumes(settings.audio);
+    runtime?.setFeedback(settings.feedback);
     runtime?.setReducedMotion(settings.reducedMotion);
     runtime?.setGraphics(settings.graphics);
     runtime?.setControls(settings.controls);
@@ -204,6 +209,7 @@ export default function App() {
     const capture = captureRef.current;
     if (!capture || gatePending) return;
     menuAudio.unlock();
+    setEntrySoundStarted(true);
     setGatePending(true);
     setGateError(null);
     // Fullscreen belongs to the entrance. The menu keeps the cursor until practice starts.
@@ -240,6 +246,7 @@ export default function App() {
         runtime.setAppearance(settingsRef.current.appearance);
         runtime.setMuted(settingsRef.current.muted);
         runtime.setAudioVolumes(settingsRef.current.audio);
+        runtime.setFeedback(settingsRef.current.feedback);
         runtime.setReducedMotion(settingsRef.current.reducedMotion);
         runtime.setGraphics(settingsRef.current.graphics);
         runtime.setControls(settingsRef.current.controls);
@@ -313,7 +320,7 @@ export default function App() {
       aria-hidden={!((screen === 'practice' && !paused) || onlineActive) || gateVisible}
       aria-label={`${activeArena.name}. Mouse aims. ${controlHelp(settings.controls).map(item => `${item.keys.join(' or ') || 'Unbound'}: ${item.description}.`).join(' ')}`} />
     {screen === 'menu' && !gateVisible && <main className="menu-screen" data-testid="menu-screen">
-      <MenuBackdrop appearance={settings.appearance} reducedMotion={settings.reducedMotion} />
+      <MenuBackdrop appearance={settings.appearance} reducedMotion={settings.reducedMotion} getDanceTime={menuAudio.getDanceTime} />
       <div className="menu-vignette" />
       <div className="menu-corner"><Mark /><span>BURNHOP</span></div>
       <section className="menu-copy">
@@ -344,11 +351,13 @@ export default function App() {
     {assets && screen === 'crouch-preview' && <div className="app-surface"><CrouchPreview assets={assets} appearance={settings.appearance} reducedMotion={settings.reducedMotion} onExit={backToMenu} onPractice={() => enterPractice()} /></div>}
     {assets && screen === 'character-preview' && <div className="app-surface"><CharacterPreview assets={assets} reducedMotion={settings.reducedMotion} onExit={backToMenu} /></div>}
     {screen === 'practice' && <main className="game-screen">
+      <CombatFeedback health={hud.health} damagePulse={hud.damageSequence ?? 0} killPulse={hud.killSequence ?? 0}
+        reducedMotion={settings.reducedMotion} intensity={settings.feedback.intensity} active={!paused && !gateVisible} />
       <div className="hud-layer" inert={paused || gateVisible} aria-hidden={paused || gateVisible}>
         <button className="pause-trigger" aria-label="Pause practice" onClick={pause}><span aria-hidden="true">Ⅱ</span><kbd>ESC</kbd></button>
         <span className="arena-readout" data-testid="arena-name">{activeArena.name}</span>
         <CombatHud hud={hud} />
-        <span className="zoom-readout" aria-label={`Zoom ${zoom}x`} data-testid="zoom-level">{zoom}x</span>
+        <span className="zoom-readout" aria-label={`View range ${zoom}x`} title="Higher view range shows more arena" data-testid="zoom-level">View range {zoom}x</span>
         <span className="fps-readout" data-testid="fps" aria-label="Frames per second">{fps === null ? '—' : Math.round(fps)} FPS</span>
       </div>
       {paused && <div className="pause-backdrop" data-testid="capture-overlay">
@@ -357,6 +366,16 @@ export default function App() {
           <h1 id="pause-title">PAUSED</h1>
           <KeyboardCaptureNotice status={keyboardStatus} onRetry={retryKeyboard} />
           <div className="pause-statistics"><span><b data-testid="kills">{hud.kills.toString().padStart(2, '0')}</b> Eliminations</span><span><b>{accuracy}%</b> Accuracy</span></div>
+          <div className="practice-loadout" aria-label="Practice loadout">
+            <label htmlFor="practice-main">Practice weapon<select id="practice-main" value={hud.weaponId ?? 'pistol'} onChange={event => {
+              const main = event.target.value as WeaponId;
+              runtimeRef.current?.setPracticeLoadout(main, WEAPONS[main].dualWield ? hud.offhand?.weaponId ?? null : null);
+            }}>{Object.values(WEAPONS).map(weapon => <option value={weapon.id} key={weapon.id}>{weapon.name}</option>)}</select></label>
+            <label htmlFor="practice-offhand">Second hand<select id="practice-offhand" value={hud.offhand?.weaponId ?? ''}
+              disabled={!WEAPONS[hud.weaponId ?? 'pistol'].dualWield} onChange={event => {
+                runtimeRef.current?.setPracticeLoadout(hud.weaponId ?? 'pistol', event.target.value ? event.target.value as WeaponId : null);
+              }}><option value="">None</option>{Object.values(WEAPONS).filter(weapon => weapon.dualWield).map(weapon => <option value={weapon.id} key={weapon.id}>{weapon.name}</option>)}</select></label>
+          </div>
           {captureError && <p className="capture-error" role="alert" data-testid="capture-error">{captureError}</p>}
           {pending && <p role="status" className="capture-status">Capturing mouse…</p>}
           <div className="pause-actions">
@@ -374,11 +393,21 @@ export default function App() {
     <FullscreenEscapeHold target={shellRef} enabled={!gateVisible} onExit={exitFullscreen} />
     {gateVisible && <main className="fullscreen-gate" data-testid="fullscreen-gate" aria-label={entered ? 'Fullscreen required' : 'Enter Burnhop'} onKeyDown={containFocus}>
       <EntryLandscape reducedMotion={settings.reducedMotion} />
+      <div className="entry-shade" />
+      <DancePilot appearance={settings.appearance} reducedMotion={settings.reducedMotion} getDanceTime={menuAudio.getDanceTime} />
       <div className="entry-action">
+        <p className="entry-eyebrow"><Mark /><span>JETPACKS ON. GOOD SENSE OFF.</span></p>
+        <h1 className="entry-wordmark">BURN<span>HOP</span></h1>
+        <p className="entry-tagline">Small pilots. Big trouble.</p>
         <button ref={gateButtonRef} className="entry-button" disabled={gatePending} onClick={enterShell}>
           <svg aria-hidden="true" viewBox="0 0 24 24" fill="none"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5" stroke="currentColor" strokeWidth="1.3" /></svg>
           {gatePending ? 'Entering fullscreen…' : entered ? 'Return to fullscreen' : 'Enter game'}
         </button>
+        <button className="entry-sound" aria-label={`Entry sound: ${entrySoundStarted && !settings.muted ? 'on' : 'off'}`} onClick={() => {
+          const muted = entrySoundStarted ? !settings.muted : false;
+          setSettings(current => ({ ...current, muted }));
+          setEntrySoundStarted(true); menuAudio.unlock();
+        }}><SoundIcon muted={!entrySoundStarted || settings.muted} /><span>{entrySoundStarted && !settings.muted ? 'SOUND ON' : 'SOUND OFF · TAP FOR THE BEAT'}</span></button>
         {entered && <p className="gate-note">Fullscreen is required to continue.</p>}
         {entered && screen === 'practice' && <p className="gate-note">Your practice session is paused and ready to resume.</p>}
         {entered && <KeyboardCaptureNotice status={keyboardStatus} />}

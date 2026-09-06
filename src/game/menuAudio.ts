@@ -1,4 +1,5 @@
 import { defaultAudioSettings, normalizeAudioSettings, type AudioSettings } from './audioSettings';
+import { createDanceBuffer } from './audioSynthesis';
 
 const UI_VOLUME = 0.3;
 const HOVER_INTERVAL = 0.065;
@@ -22,6 +23,12 @@ export class MenuAudio {
   private resumePending = false;
   private revision = 0;
   private lastHover = -Infinity;
+  private danceActive = false;
+  private danceBuffer: AudioBuffer | null = null;
+  private danceSource: AudioBufferSourceNode | null = null;
+  private danceGain: GainNode | null = null;
+  private danceStarted = 0;
+  private danceOffset = 0;
 
   /** Call directly from a user gesture; both browser playback requests begin synchronously. */
   unlock(): void {
@@ -30,7 +37,7 @@ export class MenuAudio {
     this.revision++;
 
     try {
-      if (!this.music) {
+      if (!this.music && !this.danceActive) {
         this.music = new Audio(`${import.meta.env.BASE_URL}assets/audio/midnight-hangar.mp3`);
         this.music.loop = true;
         this.music.volume = this.volumes.masterVolume * this.volumes.musicVolume;
@@ -52,12 +59,51 @@ export class MenuAudio {
         void context.resume().then(() => {
           this.resumePending = false;
           if (this.disposed && context.state !== 'closed') this.closeContext(context);
+          else this.syncDance();
         }, () => { this.resumePending = false; });
       }
+      this.syncDance();
     } catch {
       this.resumePending = false;
       // Sound must not prevent navigation when browser audio policies deny it.
     }
+  }
+
+  setDanceActive(active: boolean): void {
+    if (this.disposed || this.danceActive === active) return;
+    this.danceActive = active;
+    this.revision++;
+    this.syncMusic();
+  }
+
+  /** null means the silent visual should advance on its own presentation clock. */
+  getDanceTime(): number | null {
+    return this.danceSource && this.context ? this.danceOffset + this.context.currentTime - this.danceStarted : null;
+  }
+
+  private syncDance(): void {
+    const context = this.context;
+    if (!this.danceActive || !this.shouldPlayMusic() || !context || context.state !== 'running') {
+      this.stopDance(); return;
+    }
+    try {
+      if (!this.danceGain) { this.danceGain = context.createGain(); this.danceGain.connect(context.destination); }
+      this.danceGain.gain.value = this.volumes.masterVolume * this.volumes.musicVolume;
+      if (this.danceSource) return;
+      this.danceBuffer ??= createDanceBuffer(context);
+      const source = context.createBufferSource();
+      source.buffer = this.danceBuffer; source.loop = true; source.connect(this.danceGain);
+      this.danceStarted = context.currentTime;
+      this.danceSource = source;
+      source.start(0, this.danceOffset % this.danceBuffer.duration);
+    } catch { this.stopDance(); }
+  }
+
+  private stopDance(): void {
+    if (!this.danceSource) return;
+    if (this.context) this.danceOffset += Math.max(0, this.context.currentTime - this.danceStarted);
+    try { this.danceSource.stop(); } catch { /* An ended context may already have stopped the loop. */ }
+    this.danceSource.disconnect(); this.danceSource = null;
   }
 
   setMusicActive(active: boolean): void {
@@ -97,10 +143,14 @@ export class MenuAudio {
   }
 
   private syncMusic(primeOnUnlock = false): void {
+    if (this.danceActive) {
+      if (this.music) { this.music.muted = true; this.music.pause(); }
+      this.syncDance(); return;
+    } else this.stopDance();
     const music = this.music;
     if (!music) return;
     music.volume = this.volumes.masterVolume * this.volumes.musicVolume;
-    const shouldPlay = this.shouldPlayMusic();
+    const shouldPlay = !this.danceActive && this.shouldPlayMusic();
     // Safari needs play() in the gesture itself, before an async fullscreen grant.
     // Prime once in silence; menu activation can reuse the same pending request.
     const prime = primeOnUnlock && !this.mediaUnlocked && this.unlocked && this.visible && !this.muted && !this.disposed && music.volume > 0;
@@ -118,7 +168,7 @@ export class MenuAudio {
       void Promise.resolve(music.play()).then(() => {
         this.playPending = false;
         this.mediaUnlocked = true;
-        if (!this.shouldPlayMusic()) music.pause();
+        if (this.danceActive || !this.shouldPlayMusic()) music.pause();
         else if (revision !== this.revision) this.syncMusic();
       }, () => {
         this.playPending = false;
@@ -193,6 +243,7 @@ export class MenuAudio {
   destroy(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.stopDance(); this.danceGain?.disconnect(); this.danceGain = null; this.danceBuffer = null;
     this.syncUiVolume();
     if (this.music) {
       this.music.muted = true;

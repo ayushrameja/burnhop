@@ -1,6 +1,8 @@
 import { BOT_APPEARANCE, DEFAULT_APPEARANCE, normalizeAppearance, type DetailedAppearance } from './appearance';
 import { GameAudio } from './audio';
 import type { AudioSettings } from './audioSettings';
+import { getCombatHud } from './hud';
+import { createWeapon, WEAPONS, type WeaponId } from './weapons';
 import { getReloadProgress } from './reload';
 import { clampAimPointer, moveAimPointer, resolveAimAngle, resolveWeaponAim, type AimMode } from './aim';
 import { Renderer } from './renderer';
@@ -12,7 +14,7 @@ import { defaultGraphics, normalizeGraphics, FramePacer, type GraphicsSettings }
 import { registerPerformanceReport } from './performanceReport';
 import { FramePerformance } from './framePerformance';
 import { isTabCloseShortcut, protectGameSession } from './leaveGuard';
-import { DEFAULT_ZOOM_LEVEL, nextZoomLevel, type ZoomLevel } from './camera';
+import { DEFAULT_ZOOM_LEVEL, nextZoomLevel, clampViewLevel, type ZoomLevel } from './camera';
 import type { GameAssets } from './assets';
 import { type GameEvent, type HudState, type InputCommand, type Vec2, type WorldState } from './types';
 
@@ -50,6 +52,9 @@ export class GameRuntime {
   private lastTime = 0;
   private lastHudTime = 0;
   private debug = false;
+  private feedback = { heartbeat: true, intensity: 1 };
+  private killSequence = 0;
+  private practiceEquipmentSequence = 0;
   private reducedMotion = false;
   private resizeObserver: ResizeObserver;
   private performance = new FramePerformance();
@@ -144,7 +149,8 @@ export class GameRuntime {
     this.latestAimAngle = this.world.player.aimAngle;
     this.lastTime = performance.now(); this.lastDrawTime = this.lastTime; this.pacer.reset();
     this.resetPerformance();
-    // Reset disposable camera/effects while keeping the session's selected view preset.
+    this.zoomLevel = DEFAULT_ZOOM_LEVEL; this.killSequence = 0;
+    // A fresh practice life starts with the standard pistol and close view.
     this.renderer.destroy();
     this.renderer = new Renderer(this.canvas, this.assets);
     this.renderer.setZoom(this.zoomLevel);
@@ -162,6 +168,19 @@ export class GameRuntime {
   setAppearance(value: DetailedAppearance): void { this.appearance = normalizeAppearance(value); if (this.paused) this.draw([], 0, 1); }
   setMuted(muted: boolean): void { this.audio.setMuted(muted); }
   setAudioVolumes(volumes: AudioSettings): void { this.audio.setVolumes(volumes); }
+  setFeedback(value: { heartbeat: boolean; intensity: number }): void { this.feedback = { ...value }; }
+  setPracticeLoadout(main: WeaponId, offhand: WeaponId | null): void {
+    const p = this.world.player;
+    p.weapon = createWeapon(main, `practice:main:${++this.practiceEquipmentSequence}`);
+    p.offhand = offhand && WEAPONS[main].dualWield && WEAPONS[offhand].dualWield
+      ? createWeapon(offhand, `practice:offhand:${++this.practiceEquipmentSequence}`) : null;
+    p.equipTicks = 18; p.fireHeldLast = false;
+    this.input.clear(); this.zoomLevel = clampViewLevel(this.zoomLevel, p);
+    this.renderer.setZoom(this.zoomLevel); this.callbacks.onZoom?.(this.zoomLevel);
+    this.previous = cloneWorld(this.world); this.audio.pause();
+    this.draw([], 0, 1); this.publishHud();
+    if (!this.paused) void this.audio.unlock();
+  }
   setReducedMotion(value: boolean): void { this.reducedMotion = value; }
   setGraphics(value: GraphicsSettings): void {
     this.graphics = normalizeGraphics(value); this.renderer.setGraphics(this.graphics);
@@ -211,7 +230,7 @@ export class GameRuntime {
     const actions = this.input.press(binding);
     if (actions.includes('pause')) { this.pause(); this.callbacks.onPause(); return; }
     if (actions.includes('zoom')) {
-      this.zoomLevel = nextZoomLevel(this.zoomLevel);
+      this.zoomLevel = nextZoomLevel(this.zoomLevel, this.world.player);
       this.renderer.setZoom(this.zoomLevel);
       this.callbacks.onZoom?.(this.zoomLevel);
     }
@@ -275,17 +294,18 @@ export class GameRuntime {
       const tickEvents = stepSimulation(this.world, command, this.assets.arena);
       this.input.reconcile(this.world.player, tickEvents);
       // Contacts and reload cues follow simulation progress, including pause/resume.
-      this.audio.play(tickEvents);
-      this.audio.updateMovement(this.world.player);
-      this.audio.updateReload(getReloadProgress(this.world.player.weapon.reloadTicks, CONFIG.reloadTicks));
-      this.audio.setThrust(this.world.player.thrusting);
+      const p = this.world.player;
+      this.audio.updateActor(p.id, p, getReloadProgress(p.weapon.reloadTicks, WEAPONS[p.weapon.weaponId].reloadTicks),
+        p.thrusting, tickEvents, p, true);
+      if (tickEvents.some(event => event.type === 'targetDeath')) { this.killSequence++; this.audio.playKillConfirmation(); }
+      this.audio.setHeartbeat(this.feedback.heartbeat && !this.paused, p.health);
       events.push(...tickEvents);
       hadEvents ||= tickEvents.length > 0;
     });
     if (this.pacer.shouldDraw(time, this.graphics.frameRate)) {
       const interval = time - this.lastDrawTime; this.lastDrawTime = time;
       const started = performance.now();
-      this.draw(events, Math.min(interval / 1000, .1), alpha);
+      this.draw(events, interval / 1000, alpha);
       this.performance.record(interval, performance.now() - started);
       events.length = 0; this.frames++;
       this.recordFrame(time);
@@ -311,9 +331,9 @@ export class GameRuntime {
   }
   private publishHud(): void {
     const p = this.world.player;
-    this.callbacks.onHud({ health: p.health, fuel: p.fuel, ammo: p.weapon.ammo,
-      reloadProgress: getReloadProgress(p.weapon.reloadTicks, CONFIG.reloadTicks),
-      shotsFired: this.world.shotsFired, hits: this.world.hits, kills: this.world.kills, targetHealth: this.world.target.health });
+    this.callbacks.onHud({ ...getCombatHud(p, {
+      shotsFired: this.world.shotsFired, hits: this.world.hits, kills: this.world.kills, targetHealth: this.world.target.health }),
+      damageSequence: 0, killSequence: this.killSequence });
   }
   destroy(): void {
     if (this.disposed) return;

@@ -5,7 +5,8 @@ export const ACTIONS = [
   { id: 'crouch', label: 'Crouch' }, { id: 'jump', label: 'Jump' },
   { id: 'jetpack', label: 'Jetpack' }, { id: 'fire', label: 'Fire' },
   { id: 'aimSwitch', label: 'Switch aim style' }, { id: 'reload', label: 'Reload' },
-  { id: 'zoom', label: 'Cycle zoom' }, { id: 'pause', label: 'Pause' },
+  { id: 'zoom', label: 'Cycle view range' }, { id: 'pickup', label: 'Equip weapon alone' },
+  { id: 'pair', label: 'Pair weapon' }, { id: 'punch', label: 'Punch' }, { id: 'pause', label: 'Pause' },
 ] as const;
 export type ActionId = typeof ACTIONS[number]['id'];
 export type Binding = string;
@@ -26,7 +27,8 @@ export function defaultControls(): ControlsSettings {
     bindings: {
       moveLeft: ['KeyA', null], moveRight: ['KeyD', null], crouch: ['KeyS', 'ArrowDown'],
       jump: ['Space', null], jetpack: ['KeyW', null], fire: ['Mouse0', null],
-      aimSwitch: ['Mouse2', null], reload: ['KeyR', null], zoom: ['Tab', null], pause: [null, null],
+      aimSwitch: ['Mouse2', null], reload: ['KeyR', null], zoom: ['Tab', null],
+      pickup: ['KeyE', null], pair: ['KeyQ', null], punch: ['KeyF', null], pause: [null, null],
     },
     behavior: { movement: 'hold', crouch: 'hold', jetpack: 'hold', fire: 'hold', aimSwitch: 'hold' },
     jetpackSource: 'combined', defaultAimMode: 'radial',
@@ -143,7 +145,10 @@ export function controlHelp(controls: ControlsSettings): { action: ActionId; key
     { action: 'fire', keys: actionBindings(controls, 'fire').map(bindingLabel), description: `${verb('fire')} to fire` },
     { action: 'aimSwitch', keys: actionBindings(controls, 'aimSwitch').map(bindingLabel), description: `${verb('aimSwitch')} for ${alternate}` },
     { action: 'reload', keys: actionBindings(controls, 'reload').map(bindingLabel), description: 'Reload' },
-    { action: 'zoom', keys: actionBindings(controls, 'zoom').map(bindingLabel), description: 'Cycle zoom · 1x / 3x / 5x' },
+    { action: 'zoom', keys: actionBindings(controls, 'zoom').map(bindingLabel), description: 'Cycle view range · higher values show more arena' },
+    { action: 'pickup', keys: actionBindings(controls, 'pickup').map(bindingLabel), description: 'Equip nearby weapon alone' },
+    { action: 'pair', keys: actionBindings(controls, 'pair').map(bindingLabel), description: 'Pair a nearby pistol or SMG' },
+    { action: 'punch', keys: actionBindings(controls, 'punch').map(bindingLabel), description: 'Punch · damage and knockback' },
     { action: 'pause', keys: actionBindings(controls, 'pause').map(bindingLabel), description: 'Pause / release mouse' },
   ];
 }

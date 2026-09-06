@@ -4,11 +4,12 @@ export interface AudioSettings {
   weaponsVolume: number;
   movementVolume: number;
   uiVolume: number;
+  feedbackVolume: number;
 }
 
 /** Linear gains from 0 (silent) to 1 (full volume). Each caller receives its own mix. */
 export function defaultAudioSettings(): AudioSettings {
-  return { masterVolume: 1, musicVolume: 0.1, weaponsVolume: 0.8, movementVolume: 0.85, uiVolume: 1 };
+  return { masterVolume: 1, musicVolume: 0.1, weaponsVolume: 0.8, movementVolume: 0.85, uiVolume: 1, feedbackVolume: 0.8 };
 }
 
 /** Keep valid channels when a saved mix is incomplete or corrupt. */

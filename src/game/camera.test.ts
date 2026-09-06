@@ -1,18 +1,20 @@
+import { createWorld } from './simulation';
+import { createWeapon } from './weapons';
 import { describe, expect, it } from 'vitest';
 import arena from '../../public/assets/arena.json';
-import { CAMERA_VIEWPORT, ZOOM_SCALES, followCamera, getCameraTarget, nextZoomLevel, type ZoomLevel } from './camera';
+import { CAMERA_VIEWPORT, ZOOM_SCALES, followCamera, getCameraTarget, nextZoomLevel, allowedViewLevels, clampViewLevel, type ZoomLevel } from './camera';
 
-const levels: ZoomLevel[] = [1, 3, 5];
+const levels: ZoomLevel[] = [1, 1.5, 2, 2.5, 4];
 
 describe('camera framing', () => {
-  it('cycles from 1× through 3× and 5×', () => {
-    expect([nextZoomLevel(1), nextZoomLevel(3), nextZoomLevel(5)]).toEqual([3, 5, 1]);
+  it('cycles through the complete arena view tiers', () => {
+    expect(levels.map(level => nextZoomLevel(level))).toEqual([1.5, 2, 2.5, 4, 1]);
   });
 
-  it('uses 1× for the closest view, 3× for original framing, and 5× for the widest view', () => {
-    expect(ZOOM_SCALES).toEqual({ 1: 1.5, 3: 1.1, 5: 0.75 });
-    expect(CAMERA_VIEWPORT.width / ZOOM_SCALES[1]).toBeLessThan(CAMERA_VIEWPORT.width / ZOOM_SCALES[3]);
-    expect(CAMERA_VIEWPORT.width / ZOOM_SCALES[3]).toBeLessThan(CAMERA_VIEWPORT.width / ZOOM_SCALES[5]);
+  it('uses 1× for the closest view, 2.5× for original framing, and 4× for the widest view', () => {
+    expect(ZOOM_SCALES).toEqual({ 1: 1.5, 1.5: 1.35, 2: 1.2, 2.5: 1.1, 4: 0.75 });
+    expect(CAMERA_VIEWPORT.width / ZOOM_SCALES[1]).toBeLessThan(CAMERA_VIEWPORT.width / ZOOM_SCALES[2.5]);
+    expect(CAMERA_VIEWPORT.width / ZOOM_SCALES[2.5]).toBeLessThan(CAMERA_VIEWPORT.width / ZOOM_SCALES[4]);
   });
 
   it.each(levels)('centers interior anchors and stops at every arena edge at %s×', level => {
@@ -58,10 +60,24 @@ describe('camera framing', () => {
 
   it('caps sudden movement even before easing can catch up', () => {
     const anchor = { x: 1200, y: 650 };
-    const scale = ZOOM_SCALES[5];
+    const scale = ZOOM_SCALES[4];
     const desired = getCameraTarget(anchor, arena, scale);
     const position = followCamera({ x: 0, y: 0 }, anchor, arena, scale, 0);
     expect((desired.x - position.x) * scale).toBeCloseTo(24);
     expect((desired.y - position.y) * scale).toBeCloseTo(32);
   });
+});
+
+it('caps arena awareness by current loadout and clamps immediately when pairing', () => {
+  const p = createWorld(arena).player;
+  expect(allowedViewLevels(p)).toEqual([1]);
+  p.weapon = createWeapon('ak47');
+  expect(allowedViewLevels(p)).toEqual([1, 1.5, 2, 2.5]);
+  expect(nextZoomLevel(2.5, p)).toBe(1);
+  p.weapon = createWeapon('sniper');
+  expect(clampViewLevel(4, p)).toBe(4);
+  p.weapon = createWeapon('ump');
+  expect(clampViewLevel(4, p)).toBe(1.5);
+  p.offhand = createWeapon('uzi');
+  expect(clampViewLevel(1.5, p)).toBe(1);
 });

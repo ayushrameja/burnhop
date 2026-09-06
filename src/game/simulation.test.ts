@@ -4,6 +4,7 @@ import { moveAndCollide, rayRectDistance } from './collision';
 import { cloneWorld, CONFIG, createWorld, getJetAcceleration, getMuzzlePosition, getWeaponOrigin, releasePlayerInput, stepSimulation } from './simulation';
 import { CHARACTER_SCALE, CROUCH_COLLISION_HEIGHT, CROUCH_TRANSITION_SECONDS, getStanceHeight, getStanceWeaponOffset } from './stance';
 import { FixedStepClock } from './timing';
+import { createWeapon, WEAPONS } from './weapons';
 import type { Arena, GameEvent, InputCommand, WorldState } from './types';
 
 const arena: Arena = arenaData;
@@ -312,7 +313,7 @@ describe('gameplay crouch', () => {
     expect(origin.y).toBeCloseTo(arena.floorY + offset.y);
     expect(origin.y - standingOrigin.y).toBeCloseTo(17.44 * CHARACTER_SCALE);
     const events = tick(world, { crouchHeld: true, fireHeld: true, aimAngle });
-    expect(events.find(event => event.type === 'shot')).toMatchObject({ y: origin.y });
+    expect(events.find(event => event.type === 'shot')).toMatchObject({ originX: origin.x, originY: origin.y });
   });
 
   it('fires downward from the crouched barrel above the floor rather than falling back to the hand', () => {
@@ -321,23 +322,26 @@ describe('gameplay crouch', () => {
     advance(world, transitionTicks, { crouchHeld: true, aimAngle });
     const muzzle = getMuzzlePosition(world.player);
     expect(muzzle.y).toBeLessThan(arena.floorY);
-    expect(muzzle.y).toBeGreaterThan(getWeaponOrigin(world.player).y + 20);
+    expect(muzzle.y).toBeGreaterThan(getWeaponOrigin(world.player).y + 10);
     const events = tick(world, { crouchHeld: true, fireHeld: true, aimAngle });
-    expect(events.find(event => event.type === 'shot')).toMatchObject({
-      x: muzzle.x, y: muzzle.y, toY: arena.floorY, hit: false,
-    });
+    const shot = events.find(event => event.type === 'shot')!;
+    expect(shot).toMatchObject({ toY: arena.floorY, hit: false });
+    expect(shot.y).toBeCloseTo(muzzle.y, 3);
+    expect(shot.y).toBeGreaterThan(shot.originY);
   });
 
   it('blocks the lowered hand behind cover that a standing shot clears', () => {
     const standing = createWorld(arena);
     const crouched = createWorld(arena);
+    standing.player.weapon = createWeapon('ak47', 'standing-cover');
+    crouched.player.weapon = createWeapon('ak47', 'crouched-cover');
     advance(crouched, transitionTicks, { crouchHeld: true });
     const wall = { x: standing.player.x + standing.player.width + 1, y: arena.floorY - 30, width: 2, height: 30 };
     const map = { ...arena, platforms: [wall] };
     expect(getWeaponOrigin(standing.player).y).toBeLessThan(wall.y);
     const origin = getWeaponOrigin(crouched.player);
     expect(origin.y).toBeGreaterThan(wall.y);
-    expect(origin.x + CONFIG.muzzleLength).toBeGreaterThan(wall.x);
+    expect(origin.x + WEAPONS.ak47.muzzleLength).toBeGreaterThan(wall.x);
     expect(tick(standing, { fireHeld: true }, map).find(event => event.type === 'shot')).toMatchObject({ hit: true });
     expect(tick(crouched, { crouchHeld: true, fireHeld: true }, map).find(event => event.type === 'shot')).toMatchObject({ x: origin.x, y: origin.y, toX: wall.x, hit: false });
     expect(crouched.target.health).toBe(100);
@@ -444,14 +448,14 @@ describe('jetpack state transitions', () => {
   });
 });
 
-describe('rifle and targets', () => {
-  it('fires exactly ten shots per second and stops at an empty magazine', () => {
+describe('default pistol and targets', () => {
+  it('fires exactly five shots per second and stops at an empty magazine', () => {
     const world = createWorld(arena);
     advance(world, 60, { fireHeld: true });
-    expect(world.shotsFired).toBe(10);
-    expect(world.player.weapon.ammo).toBe(20);
+    expect(world.shotsFired).toBe(5);
+    expect(world.player.weapon.ammo).toBe(7);
     advance(world, 240, { fireHeld: true });
-    expect(world.shotsFired).toBe(30);
+    expect(world.shotsFired).toBe(12);
     expect(world.player.weapon.ammo).toBe(0);
     expect(world.player.weapon.reloadTicks).toBe(0);
   });
@@ -462,23 +466,24 @@ describe('rifle and targets', () => {
     expect(tick(world, { reloadPressed: true }).map(e => e.type)).toContain('reloadStart');
     expect(world.player.weapon.reloadTicks).toBe(72);
     advance(world, 71, { fireHeld: true });
-    expect(world.player.weapon.ammo).toBe(29);
+    expect(world.player.weapon.ammo).toBe(11);
     expect(world.shotsFired).toBe(1);
     expect(tick(world).map(e => e.type)).toContain('reloadEnd');
-    expect(world.player.weapon.ammo).toBe(30);
+    expect(world.player.weapon.ammo).toBe(12);
     expect(world.player.weapon.reloadTicks).toBe(0);
     expect(tick(world, { reloadPressed: true }).map(e => e.type)).not.toContain('reloadStart');
   });
 
-  it('deals 20 damage, kills with five hits, and respawns exactly two seconds later', () => {
+  it('deals 18 close-range body damage, kills with six hits, and respawns two seconds later', () => {
     const world = createWorld(arena);
+    world.target.x = world.player.x + 150;
     const first = tick(world, { fireHeld: true });
-    expect(world.target.health).toBe(80);
-    expect(first.find(e => e.type === 'hit')).toMatchObject({ damage: 20 });
-    const events = advance(world, 24, { fireHeld: true });
+    expect(world.target.health).toBe(82);
+    expect(first.find(e => e.type === 'hit')).toMatchObject({ damage: 18, region: 'body' });
+    const events = advance(world, 60, { fireHeld: true });
     expect(world.target.health).toBe(0);
     expect(world.kills).toBe(1);
-    expect(world.hits).toBe(5);
+    expect(world.hits).toBe(6);
     expect(world.target.respawnTicks).toBe(120);
     expect(events.filter(e => e.type === 'targetDeath')).toHaveLength(1);
     advance(world, 119);
@@ -498,9 +503,10 @@ describe('rifle and targets', () => {
 
   it('blocks a shot when the hand is behind cover but the muzzle extends through it', () => {
     const world = createWorld(arena);
+    world.player.weapon = createWeapon('ak47', 'cover-test');
     const origin = getWeaponOrigin(world.player);
     const wall = { x: world.player.x + world.player.width + 1, y: 1100, width: 2, height: 120 };
-    expect(wall.x).toBeLessThan(origin.x + CONFIG.muzzleLength);
+    expect(wall.x).toBeLessThan(origin.x + WEAPONS.ak47.muzzleLength);
     const events = tick(world, { fireHeld: true }, { ...arena, platforms: [wall] });
     expect(events.find(e => e.type === 'shot')).toMatchObject({ x: origin.x, toX: wall.x, hit: false });
     expect(world.target.health).toBe(100);
@@ -513,10 +519,11 @@ describe('rifle and targets', () => {
     const aim = Math.atan2(world.target.y + 30 - (world.player.y + 30), world.target.x + 18 - (world.player.x + 18));
     tick(world, { fireHeld: true, jumpPressed: true, jumpHeld: true, aimAngle: aim });
     expect(world.player.thrusting).toBe(true);
-    expect(world.target.health).toBe(80);
+    expect(world.target.health).toBeLessThan(100);
+    const healthAfterFirstHit = world.target.health;
     world.player.x = 1200; world.player.y = 1152; world.player.vy = 0;
-    advance(world, 6, { fireHeld: true, aimAngle: Math.PI });
-    expect(world.target.health).toBe(60);
+    advance(world, 12, { fireHeld: true, aimAngle: Math.PI });
+    expect(world.target.health).toBeLessThan(healthAfterFirstHit);
   });
 
   it('handles parallel rays, origins in cover, and geometry behind the shot', () => {
@@ -539,6 +546,7 @@ describe('headless deterministic boundary', () => {
     releasePlayerInput(world);
     before.player.thrusting = false;
     before.player.thrustLatched = false;
+    before.player.fireHeldLast = false;
     expect(world).toEqual(before);
     tick(world);
     expect(world.player.thrusting).toBe(false);
@@ -548,7 +556,7 @@ describe('headless deterministic boundary', () => {
   it('clones all mutable state and serializes without browser objects', () => {
     const world = createWorld(arena), copy = cloneWorld(world);
     copy.player.weapon.ammo = 1; copy.player.x = 20; copy.target.health = 20;
-    expect(world.player.weapon.ammo).toBe(30);
+    expect(world.player.weapon.ammo).toBe(12);
     expect(world.player.x).toBe(arena.playerSpawn.x);
     expect(world.target.health).toBe(100);
     expect(JSON.parse(JSON.stringify(world))).toEqual(world);

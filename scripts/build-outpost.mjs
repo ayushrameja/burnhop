@@ -38,6 +38,15 @@ const arena = {
   playerSpawn: { x: spawnPoints[0].x, y: spawnPoints[0].y },
   targetSpawn: { x: 350 * scale, y: 800 * scale + sky - 68 },
   platforms: [], spawnPoints,
+  pickupPads: [
+    { id: 'west-courtyard-weapon', x: 490, y: 1300, kind: 'ordinary' },
+    { id: 'lower-tunnel-weapon', x: 1080, y: 1482, kind: 'ordinary' },
+    { id: 'west-middle-weapon', x: 1560, y: 941.6, kind: 'ordinary' },
+    { id: 'lower-saddle-weapon', x: 2100, y: 1300, kind: 'ordinary' },
+    { id: 'east-middle-weapon', x: 3280, y: 941.6, kind: 'ordinary' },
+    { id: 'east-courtyard-weapon', x: 3570, y: 1300, kind: 'ordinary' },
+    { id: 'central-sniper-drop', x: 2640, y: 670, kind: 'sniper' },
+  ],
   terrain: shapes.map(([id, material, grass, points]) => ({ id, material, grass, points: points.map(toWorld) })),
 };
 await writeFile(new URL('../public/assets/outpost.json', import.meta.url), JSON.stringify(arena, null, 2) + '\n');

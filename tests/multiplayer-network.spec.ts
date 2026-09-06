@@ -120,9 +120,9 @@ test('prediction survives 150 ms RTT, jitter, stalls beyond replay history and a
     await host.keyboard.up('Space');
     await host.mouse.move(800, 450);
     await host.mouse.down();
-    await expect.poll(async () => (await snapshot(host)).local!.weapon.ammo).toBeLessThan(30);
+    await expect.poll(async () => (await snapshot(host)).local!.weapon.ammo).toBeLessThan(12);
     await host.mouse.up();
-    await expect.poll(async () => (await snapshot(host)).authority!.weapon.ammo).toBeLessThan(30);
+    await expect.poll(async () => (await snapshot(host)).authority!.weapon.ammo).toBeLessThan(12);
 
     relay.stall(1000);
     await host.keyboard.down('KeyD');

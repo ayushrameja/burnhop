@@ -1,4 +1,5 @@
 import { installCapture, openMenu, moveAim } from './helpers/capture';
+import { choosePracticeLoadout, cycleViewTo } from './helpers/combat';
 import { test, expect, type Page } from '@playwright/test';
 import { CONFIG, getWeaponOrigin } from '../src/game/simulation';
 import { AIM_DASH_DISTANCE, AIM_DASH_LENGTH } from '../src/game/aim';
@@ -139,7 +140,7 @@ test('both mouse button orders preserve independent firing and pointer aim', asy
       expect(value.aim.firing).toBe(firstUp === 'right');
       expect(value.aim.mode).toBe(firstUp === 'left' ? 'pointer' : 'radial');
       const shots = value.world.shotsFired;
-      await ticks(page, 8);
+      await ticks(page, 13);
       if (firstUp === 'right') expect((await state(page)).world.shotsFired).toBeGreaterThan(shots);
       else expect((await state(page)).world.shotsFired).toBe(shots);
       await page.mouse.up({ button: secondUp });
@@ -203,9 +204,9 @@ test('pause, lost focus, cancellation, visibility, restart and teardown clear he
 
 test('held fire keeps hitting the target while switching aim modes', async ({ page }, testInfo) => {
   await enter(page);
-  // The spawn target is outside the close default view; use the medium view to shoot it.
-  await page.keyboard.press('Tab');
-  await expect(page.getByTestId('zoom-level')).toContainText('3x');
+  // Equip through the real loadout controls so the distant target has a supported wider view.
+  await choosePracticeLoadout(page, 'm416');
+  await cycleViewTo(page, 2.5);
   const target = await page.evaluate(() => {
     const api = window.__BURNHOP__!;
     const target = api.snapshot().target;

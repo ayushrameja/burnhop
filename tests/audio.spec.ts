@@ -7,38 +7,46 @@ interface AudioSnapshot {
   tones: number;
 }
 
-/** Observe the real media and Web Audio APIs without replacing playback. */
+/** Observe the actual synthesized loop and native Web Audio playback without replacing them. */
 async function observeAudio(page: Page) {
   await page.addInitScript(() => {
-    const tracks: HTMLAudioElement[] = [];
+    const tracks = new Map<AudioBuffer, AudioSnapshot['tracks'][number]>();
+    const identities = new Map<AudioBuffer, number>();
     let tones = 0;
-    const NativeAudio = window.Audio;
-    window.Audio = new Proxy(NativeAudio, {
-      construct(target, args) {
-        const track = Reflect.construct(target, args) as HTMLAudioElement;
-        tracks.push(track);
-        return track;
-      },
-    });
+    const createSource = AudioContext.prototype.createBufferSource;
+    AudioContext.prototype.createBufferSource = function () {
+      const context = this, source = createSource.call(this);
+      const start = source.start.bind(source), stop = source.stop.bind(source), connect = source.connect.bind(source);
+      let gain: GainNode | null = null, stopped = false, offset = 0, started = 0, stoppedTime = 0;
+      source.connect = ((destination: AudioNode, output?: number, input?: number) => {
+        if (destination instanceof GainNode) gain = destination;
+        return connect(destination, output, input);
+      }) as typeof source.connect;
+      source.start = (when = 0, from = 0, duration?: number) => {
+        const buffer = source.buffer;
+        if (source.loop && buffer && buffer.duration > 8 && buffer.duration < 9) {
+          offset = from; started = context.currentTime;
+          if (!identities.has(buffer)) identities.set(buffer, identities.size);
+          tracks.set(buffer, {
+            id: identities.get(buffer)!, loop: true, duration: buffer.duration,
+            get paused() { return stopped || context.state !== 'running'; },
+            get muted() { return (gain?.gain.value ?? 0) <= 0; },
+            get volume() { return gain?.gain.value ?? 0; },
+            get currentTime() { return (offset + (stopped ? stoppedTime : context.currentTime) - started) % buffer.duration; },
+          });
+        }
+        start(when, from, duration);
+      };
+      source.stop = (when?: number) => { stoppedTime = context.currentTime; stopped = true; stop(when); };
+      return source;
+    };
     const createOscillator = AudioContext.prototype.createOscillator;
     AudioContext.prototype.createOscillator = function () {
-      const oscillator = createOscillator.call(this);
-      const start = oscillator.start.bind(oscillator);
+      const oscillator = createOscillator.call(this), start = oscillator.start.bind(oscillator);
       oscillator.start = (when?: number) => { tones++; start(when); };
       return oscillator;
     };
-    (window as Window & { __AUDIO_FIXTURE__?: () => AudioSnapshot }).__AUDIO_FIXTURE__ = () => ({
-      tracks: tracks.flatMap((track, id) => track.src.endsWith('/assets/audio/midnight-hangar.mp3') ? [{
-        id, paused: track.paused, muted: track.muted, loop: track.loop, volume: track.volume,
-        currentTime: track.currentTime, duration: track.duration,
-      }] : []),
-      tones,
-    });
-    (window as Window & { __AUDIO_SEEK_END__?: () => void }).__AUDIO_SEEK_END__ = () => {
-      const track = tracks.find(track => !track.paused && !track.muted);
-      if (!track || !Number.isFinite(track.duration)) throw new Error('Menu music is not ready to seek.');
-      track.currentTime = track.duration - 0.15;
-    };
+    (window as Window & { __AUDIO_FIXTURE__?: () => AudioSnapshot }).__AUDIO_FIXTURE__ = () => ({ tracks: [...tracks.values()], tones });
   });
 }
 
@@ -74,7 +82,23 @@ test.beforeEach(async ({ page }) => {
   await observeAudio(page);
 });
 
-test('menu music loops at 10%, follows menu navigation, and stops for gameplay, pause, hidden pages and the gate', async ({ page }, testInfo) => {
+test('branded entry remains silent until sound is enabled and carries the same groove into the menu', async ({ page }, testInfo) => {
+  await page.goto('/');
+  const gate = page.getByTestId('fullscreen-gate');
+  await expect(gate.getByRole('heading', { name: 'BURNHOP' })).toBeVisible();
+  await expect(page.getByTestId('entry-dancer')).toBeVisible();
+  expect((await audioState(page)).tracks).toHaveLength(0);
+  await gate.getByRole('button', { name: 'Entry sound: off', exact: true }).click();
+  await expectMusic(page, true);
+  await expect(gate).toBeVisible();
+  const groove = (await playingTracks(page))[0];
+  await page.screenshot({ path: testInfo.outputPath('branded-entry.png') });
+  await gate.getByRole('button', { name: 'Enter game', exact: true }).click();
+  await expectMusic(page, true);
+  expect((await playingTracks(page))[0].id).toBe(groove.id);
+});
+
+test('original groove loops at 10%, carries through entry, and stops for gameplay, pause and hidden pages', async ({ page }, testInfo) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
@@ -87,9 +111,9 @@ test('menu music loops at 10%, follows menu navigation, and stops for gameplay, 
   const original = (await playingTracks(page))[0];
   await page.screenshot({ path: testInfo.outputPath('audio-menu.png') });
 
-  // Seek near the end to verify an actual wrap rather than waiting for the whole song.
-  await page.evaluate(() => (window as Window & { __AUDIO_SEEK_END__?: () => void }).__AUDIO_SEEK_END__!());
-  await expect.poll(async () => (await playingTracks(page))[0]?.currentTime ?? original.duration).toBeLessThan(original.duration - 0.5);
+  // One short sixteen-beat phrase is enough to verify an actual native loop wrap.
+  await expect.poll(async () => (await playingTracks(page))[0]?.currentTime ?? 0, { timeout: 10000, intervals: [100] }).toBeGreaterThan(original.duration - 0.4);
+  await expect.poll(async () => (await playingTracks(page))[0]?.currentTime ?? original.duration, { timeout: 2000, intervals: [100] }).toBeLessThan(0.4);
   await expectMusic(page, true);
 
   await page.getByRole('button', { name: 'Settings & Controls', exact: true }).click();
@@ -118,7 +142,7 @@ test('menu music loops at 10%, follows menu navigation, and stops for gameplay, 
   await expectMusic(page, true);
   await page.evaluate(() => document.exitFullscreen());
   await expect(page.getByTestId('fullscreen-gate')).toBeVisible();
-  await expectMusic(page, false);
+  await expectMusic(page, true);
   await enterMenu(page);
   await expectMusic(page, true);
   expect(errors).toEqual([]);

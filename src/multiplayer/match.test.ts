@@ -56,7 +56,7 @@ describe('multiplayer match lifecycle', () => {
     expect(events.filter(e => e.type === 'targetRespawn')).toHaveLength(2);
     for (const p of Object.values(state.players)) {
       expect(p).toMatchObject({ health: 100, fuel: 100, lifeId: 1, protectionTicks: 60 });
-      expect(p.weapon).toEqual({ ammo: 30, reloadTicks: 0, cooldownTicks: 0 });
+      expect(p.weapon).toMatchObject({ weaponId: 'pistol', ammo: 12, reserve: -1, reloadTicks: 0, cooldownTicks: 0 });
     }
   });
   it.each(['unready', 'disconnect'] as const)('cancels countdown on %s', action => {
@@ -121,7 +121,7 @@ describe('spawn, movement and neutral connections', () => {
   });
   it('neutralizes a disconnected actor while leaving it vulnerable', () => {
     const state = playing(); faceOff(state); setConnected(state, '1', false);
-    state.players['1'].health = 20;
+    state.players['1'].health = 18;
     const events = stepMatch(state, { '0': input({ fireHeld: true }), '1': input({ fireHeld: true, jumpPressed: true }) }, arena);
     expect(events.filter(e => e.type === 'shot').map(e => e.actorId)).toEqual(['0']);
     expect(state.players['1'].health).toBe(0); expect(state.players['0'].kills).toBe(1);
@@ -154,17 +154,17 @@ describe('spawn, movement and neutral connections', () => {
 
 describe('authoritative hitscan and bounded-history contract', () => {
   it('supports same-tick trades without depending on shooter iteration order', () => {
-    const state = playing(); faceOff(state); state.players['0'].health = 20; state.players['1'].health = 20;
+    const state = playing(); faceOff(state); state.players['0'].health = 18; state.players['1'].health = 18;
     const events = stepMatch(state, { '0': input({ fireHeld: true, inputId: 10 }), '1': input({ fireHeld: true, aimAngle: Math.PI, inputId: 20 }) }, arena);
     expect(Object.values(state.players).map(p => [p.health, p.kills, p.deaths])).toEqual([[0, 1, 1], [0, 1, 1]]);
     const hits = events.filter(e => e.type === 'hit');
     expect(hits.map(e => [e.actorId, e.targetId])).toEqual([['0', '1'], ['1', '0']]);
-    expect(hits[0].shotId).toBe('0:1:10');
+    expect(hits[0].shotId).toBe(`0:1:${state.players['0'].weapon.instanceId}:main:1`);
     expect(new Set(events.map(e => e.id)).size).toBe(events.length);
   });
   it('cancels protection on firing even when rewind history still contains the old shield', () => {
     const state = playing(); faceOff(state);
-    state.players['0'].health = 20; state.players['1'].health = 20;
+    state.players['0'].health = 18; state.players['1'].health = 18;
     state.players['0'].protectionTicks = 60; state.players['1'].protectionTicks = 60;
     const history = Object.fromEntries(Object.values(state.players).map(p => [p.id, { ...p }]));
     stepMatch(state, { '0': input({ fireHeld: true }), '1': input({ fireHeld: true, aimAngle: Math.PI }) }, arena,
@@ -174,7 +174,7 @@ describe('authoritative hitscan and bounded-history contract', () => {
   it('does not permit fire-held or message bursts to bypass weapon cooldown', () => {
     const state = playing(); faceOff(state); let shots = 0;
     for (let tick = 0; tick < 60; tick++) shots += stepMatch(state, { '0': input({ fireHeld: true, inputId: tick }) }, arena).filter(e => e.type === 'shot').length;
-    expect(shots).toBe(10); expect(state.players['0'].weapon.ammo).toBe(20);
+    expect(shots).toBe(5); expect(state.players['0'].weapon.ammo).toBe(7);
   });
   it('clips hits to terrain and gives cover exact-distance ties', () => {
     const state = playing(); faceOff(state);
@@ -188,7 +188,7 @@ describe('authoritative hitscan and bounded-history contract', () => {
     const state = playing(); faceOff(state); state.players['1'].y = 300;
     const history = { x: 400, y: 532, width: 36, height: 68, lifeId: 1, health: 100, protectionTicks: 0 };
     const events = stepMatch(state, { '0': input({ fireHeld: true }) }, arena, () => history);
-    expect(events.some(e => e.type === 'hit')).toBe(true); expect(state.players['1'].health).toBe(80);
+    expect(events.some(e => e.type === 'hit')).toBe(true); expect(state.players['1'].health).toBe(82);
     state.players['0'].weapon.cooldownTicks = 0;
     const crouched = { ...history, y: 580, height: 20 };
     expect(stepMatch(state, { '0': input({ fireHeld: true }) }, arena, () => crouched).some(e => e.type === 'hit')).toBe(false);

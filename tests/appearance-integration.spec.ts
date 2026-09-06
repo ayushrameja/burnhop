@@ -1,4 +1,5 @@
 import { installCapture, openMenu, moveAim } from './helpers/capture';
+import { choosePracticeLoadout, cycleViewTo } from './helpers/combat';
 import { test, expect } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { BOT_APPEARANCE, CHARACTER_LOOKS } from '../src/game/appearance';
@@ -22,8 +23,8 @@ for (const look of CHARACTER_LOOKS.filter(look => look.id !== 'base')) {
     await page.getByRole('button', { name: 'Back to menu', exact: true }).click();
     await page.getByRole('button', { name: 'Enter practice', exact: true }).click();
     await page.waitForFunction(() => window.__BURNHOP__?.metrics().running);
-    // The original 3x framing keeps the distant target onscreen for the firing check.
-    await page.keyboard.press('Tab');
+    await choosePracticeLoadout(page, 'm416');
+    await cycleViewTo(page, 2.5);
     const before = await page.evaluate(() => window.__BURNHOP__!.snapshot());
     const appearances = await page.evaluate(() => window.__BURNHOP__!.appearances());
     expect(appearances.player).toEqual(look.appearance);

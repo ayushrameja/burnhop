@@ -1,7 +1,10 @@
 import { normalizeAppearance, type DetailedAppearance } from '../game/appearance';
-import { moveAndCollide, rayRectDistance, rectOverlapsSolid } from '../game/collision';
+import { moveAndCollide, rectOverlapsSolid } from '../game/collision';
 import { CONFIG, compileArena, createWorld, getWeaponOrigin, type CompiledArena } from '../game/simulation';
-import type { Arena, GameEvent, Vec2 } from '../game/types';
+import { applyKnockback, calculateDamage, isCloserHit, rayHitRegions, resolveMeleeTarget } from '../game/combat';
+import { createWeapon, equippedWeapons, MELEE_CONFIG } from '../game/weapons';
+import { advancePickups, collectPickups, dropWeapons, resetPickups } from './pickups';
+import type { Arena, GameEvent, Vec2, HitRegion, WeaponId, WeaponHand } from '../game/types';
 import { MATCH_CONFIG, neutralInput, type ActorEvent, type MatchPlayer, type MatchState, type NetworkInput, type TargetHistory } from './model';
 import { stepPredictedActor } from './prediction';
 
@@ -10,7 +13,9 @@ const ordered = (state: MatchState): MatchPlayer[] => Object.values(state.player
 
 export function createMatch(code: string): MatchState {
   return { tick: 0, phase: 'lobby', hostId: '', code, countdownTicks: 0,
-    remainingTicks: MATCH_CONFIG.durationTicks, players: {}, winnerIds: [] };
+    remainingTicks: MATCH_CONFIG.durationTicks, players: {}, winnerIds: [],
+    pickups: {}, pickupSequence: 0, pickupSeed: [...code].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619), 2166136261) >>> 0 || 1,
+    weaponBag: [], dropScheduleIndex: 0, sniperWarningTicks: 0 };
 }
 
 export function addPlayer(state: MatchState, guest: { id: string; nickname: string; appearance: DetailedAppearance }, arena: Arena): MatchPlayer {
@@ -95,24 +100,31 @@ function eventFor(state: MatchState, player: MatchPlayer, event: GameEvent & Par
 function spawn(state: MatchState, player: MatchPlayer, arena: CompiledArena, events: ActorEvent[]): void {
   const location = selectSpawn(state, player.id, arena);
   Object.assign(player, createWorld(arena.arena).player, { id: player.id, ...location });
-  player.lifeId++; player.respawnTicks = 0; player.protectionTicks = MATCH_CONFIG.protectionTicks;
+  player.lifeId++; player.weapon = createWeapon('pistol', `spawn:${state.code}:${player.id}:${player.lifeId}`); player.respawnTicks = 0; player.protectionTicks = MATCH_CONFIG.protectionTicks;
   events.push(eventFor(state, player, { type: 'targetRespawn', x: player.x + player.width / 2, y: player.y + player.height / 2 }, events.length));
 }
-function die(state: MatchState, victim: MatchPlayer, events: ActorEvent[], killer?: MatchPlayer): void {
+function die(state: MatchState, victim: MatchPlayer, events: ActorEvent[], killer?: MatchPlayer, impactDirection: Vec2 = { x: 0, y: -1 }): void {
+  dropWeapons(state, victim, equippedWeapons(victim).map(entry => entry.weapon));
   victim.health = 0; victim.deaths++; victim.respawnTicks = MATCH_CONFIG.respawnTicks;
   victim.protectionTicks = 0; victim.thrusting = false; victim.thrustLatched = false; victim.jumpBufferTicks = 0;
   if (killer && killer.id !== victim.id) killer.kills++;
   events.push(eventFor(state, victim, { type: 'targetDeath', x: victim.x + victim.width / 2,
-    y: victim.y + victim.height / 2, targetId: victim.id, ...(killer ? { killerId: killer.id } : {}) }, events.length));
+    y: victim.y + victim.height / 2, targetId: victim.id, targetLifeId: victim.lifeId, impactDirection,
+    cosmeticSeed: (state.tick * 1664525 + victim.lifeId) >>> 0,
+    deathPose: { x: victim.x, y: victim.y, width: victim.width, height: victim.height, aimAngle: victim.aimAngle,
+      crouchAmount: victim.crouchAmount, vx: victim.vx, vy: victim.vy, appearance: victim.appearance },
+    ...(killer ? { killerId: killer.id } : {}) }, events.length));
 }
 function beginMatch(state: MatchState, arena: CompiledArena, events: ActorEvent[]): void {
   state.phase = 'playing'; state.countdownTicks = 0; state.remainingTicks = MATCH_CONFIG.durationTicks; state.winnerIds = [];
+  resetPickups(state, arena);
   for (const player of ordered(state)) { player.health = 0; player.kills = 0; player.deaths = 0; }
   for (const player of ordered(state)) spawn(state, player, arena, events);
 }
 export function returnToLobby(state: MatchState, hostId: string, map: Arena | CompiledArena): boolean {
   if (state.phase !== 'results' || state.hostId !== hostId || !state.players[hostId]?.connected) return false;
   const { arena } = compiled(map);
+  state.pickups = {}; state.sniperWarningTicks = 0;
   state.phase = 'lobby'; state.countdownTicks = 0; state.remainingTicks = MATCH_CONFIG.durationTicks; state.winnerIds = [];
   for (const player of ordered(state)) {
     Object.assign(player, createWorld(arena).player, { id: player.id });
@@ -130,6 +142,8 @@ export function stepMatch(state: MatchState, inputs: Readonly<Record<string, Net
     state.tick++; return events;
   }
   if (state.phase !== 'playing') { state.tick++; return events; }
+  advancePickups(state, arena, events);
+  const punches: Array<{ player: MatchPlayer; event: Extract<ActorEvent, { type: 'melee' | 'meleeStart' }> }> = [];
   const shots: Array<{ player: MatchPlayer; input: NetworkInput; event: Extract<ActorEvent, { type: 'shot' }> }> = [];
   const justSpawned = new Set<string>();
   for (const player of ordered(state)) {
@@ -144,45 +158,66 @@ export function stepMatch(state: MatchState, inputs: Readonly<Record<string, Net
     for (const event of actorEvents) {
       const authoritative = { ...event, id: `${state.tick}:${player.id}:${events.length}` };
       events.push(authoritative);
+      if (authoritative.type === 'meleeStart') player.protectionTicks = 0;
+      if (authoritative.type === 'melee') punches.push({ player, event: authoritative });
       if (authoritative.type === 'shot') {
         player.protectionTicks = 0;
         shots.push({ player, input, event: authoritative });
       }
     }
   }
-  const hits: Array<{ shooter: MatchPlayer; target: MatchPlayer; shotId?: string; x: number; y: number }> = [];
+  const hits: Array<{ shooter: MatchPlayer; target: MatchPlayer; shotId?: string; x: number; y: number; damage: number; direction: Vec2;
+    weaponId?: WeaponId; hand?: WeaponHand; region?: HitRegion; melee?: boolean }> = [];
   for (const { player: shooter, input, event } of shots) {
-    const origin = getWeaponOrigin(shooter), direction = { x: Math.cos(shooter.aimAngle), y: Math.sin(shooter.aimAngle) };
-    let distance = Math.hypot(event.toX - origin.x, event.toY - origin.y), selected: MatchPlayer | undefined;
-    let protectedTarget = false;
+    const origin = { x: event.originX, y: event.originY }, direction = { x: event.directionX, y: event.directionY };
+    let distance = event.distance, selected: MatchPlayer | undefined;
+    let protectedTarget = false, selectedRegion: HitRegion = 'body';
     for (const target of ordered(state)) {
       if (target.id === shooter.id || target.health <= 0) continue;
       const rectangle = history ? history(shooter, target, input) : target;
       if (!rectangle || rectangle.lifeId !== target.lifeId || (rectangle.health !== undefined && rectangle.health <= 0)) continue;
-      const targetDistance = rayRectDistance(origin, direction, rectangle, distance);
-      // Strict less-than ensures terrain wins exact distance ties. Player ties follow stable roster order.
-      if (targetDistance !== null && targetDistance < distance) {
-        distance = targetDistance; selected = target;
+      const contact = rayHitRegions(origin, direction, rectangle, distance);
+      const targetDistance = contact?.distance ?? null;
+      // Cover wins numerically coincident surfaces. Player ties follow stable roster order.
+      if (targetDistance !== null && isCloserHit(targetDistance, distance)) {
+        distance = targetDistance; selected = target; selectedRegion = contact!.region;
         // Protection is current authority: firing cancels it immediately, including same-tick trades.
         protectedTarget = target.protectionTicks > 0;
       }
     }
     if (selected) {
+      event.distance = distance;
       event.toX = origin.x + direction.x * distance; event.toY = origin.y + direction.y * distance;
-      if (distance < CONFIG.muzzleLength) { event.x = origin.x; event.y = origin.y; }
-      event.hit = !protectedTarget;
+      if (distance < Math.hypot(event.x - origin.x, event.y - origin.y)) { event.x = origin.x; event.y = origin.y; }
+      event.hit = !protectedTarget; event.surface = 'body';
       event.targetId = selected.id; event.targetLifeId = selected.lifeId;
-      if (!protectedTarget) hits.push({ shooter, target: selected, shotId: event.shotId, x: event.toX, y: event.toY });
+      if (!protectedTarget) hits.push({ shooter, target: selected, shotId: event.shotId, x: event.toX, y: event.toY, direction,
+        damage: calculateDamage(event.weaponId, selectedRegion, distance), weaponId: event.weaponId, hand: event.hand, region: selectedRegion });
     }
+  }
+  for (const { player: shooter, event } of punches) {
+    const origin = { x: event.x, y: event.y }, direction = { x: Math.cos(event.aimAngle), y: Math.sin(event.aimAngle) };
+    let selected: MatchPlayer | undefined, point: Vec2 | undefined, distance = Infinity;
+    for (const target of ordered(state)) {
+      if (target.id === shooter.id || target.health <= 0) continue;
+      const contact = resolveMeleeTarget(origin, direction, target, arena.solids);
+      if (!contact) continue;
+      const d = Math.hypot(contact.x - origin.x, contact.y - origin.y);
+      if (d < distance) { selected = target; point = contact; distance = d; }
+    }
+    if (selected && point && selected.protectionTicks <= 0) hits.push({ shooter, target: selected, x: point.x, y: point.y,
+      damage: MELEE_CONFIG.damage, direction, melee: true });
   }
   for (const hit of hits) {
     if (hit.target.health <= 0) continue;
-    const damage = Math.min(CONFIG.shotDamage, hit.target.health);
+    const damage = Math.min(hit.damage, hit.target.health);
     hit.target.health -= damage;
+    if (hit.melee) applyKnockback(hit.target, hit.direction);
     events.push(eventFor(state, hit.shooter, { type: 'hit', x: hit.x, y: hit.y, damage,
-      targetId: hit.target.id, targetLifeId: hit.target.lifeId, shotId: hit.shotId }, events.length));
-    if (hit.target.health === 0) die(state, hit.target, events, hit.shooter);
+      targetId: hit.target.id, targetLifeId: hit.target.lifeId, shotId: hit.shotId, weaponId: hit.weaponId, hand: hit.hand, region: hit.region }, events.length));
+    if (hit.target.health === 0) die(state, hit.target, events, hit.shooter, hit.direction);
   }
+  collectPickups(state, inputs, arena, events);
   for (const player of ordered(state)) if (!justSpawned.has(player.id)) player.protectionTicks = Math.max(0, player.protectionTicks - 1);
   if (--state.remainingTicks <= 0) {
     state.remainingTicks = 0; state.phase = 'results';

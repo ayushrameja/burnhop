@@ -3,6 +3,21 @@ import { installCapture, fixtureState, openMenu, enterPractice } from './helpers
 
 test.beforeEach(async ({ page }) => { await installCapture(page); });
 
+test('entry pilot holds one readable reduced-motion pose on a compact viewport', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 780 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/');
+  const pilot = page.getByTestId('entry-dancer');
+  await expect(pilot).toBeVisible();
+  const first = await pilot.evaluate(canvas => (canvas as HTMLCanvasElement).toDataURL());
+  await page.waitForTimeout(250);
+  expect(await pilot.evaluate(canvas => (canvas as HTMLCanvasElement).toDataURL())).toBe(first);
+  const entry = page.getByRole('button', { name: 'Enter game', exact: true });
+  await expect(entry).toBeInViewport();
+  await expect(page.getByRole('button', { name: 'Entry sound: off', exact: true })).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath('compact-reduced-entry.png') });
+});
+
 async function holdArena(page: Page) {
   let release!: () => void;
   let requested = false;

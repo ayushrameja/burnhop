@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { GameAudio, type MovementAudioState } from './audio';
 import { defaultAudioSettings } from './audioSettings';
-import { createSyntheticBuffer } from './audioSynthesis';
+import { createSyntheticBuffer, WEAPON_SOUND_IDS } from './audioSynthesis';
+import { createWeapon, WEAPONS } from './weapons';
 import type { GameEvent } from './types';
 
 class Param {
@@ -54,7 +55,9 @@ class Context {
   decodeAudioData = vi.fn(async (bytes: ArrayBuffer) => new Buffer(4000, this.sampleRate, new TextDecoder().decode(bytes)));
   constructor() { contexts.push(this); }
 }
-const shot: GameEvent = { type: 'shot', x: 0, y: 0, toX: 1, toY: 0, hit: false };
+const shot: Extract<GameEvent, { type: 'shot' }> = { type: 'shot', x: 0, y: 0, toX: 1, toY: 0, hit: false,
+  weaponId: 'pistol', hand: 'main', instanceId: 'test:pistol', shotCounter: 1,
+  originX: 0, originY: 0, directionX: 1, directionY: 0, range: 1000, distance: 1 };
 const standing: MovementAudioState = { x: 0, y: 0, grounded: true, vx: 0, vy: 0, crouchAmount: 0 };
 const fetchSample = vi.fn(async (url: string) => ({ ok: true, arrayBuffer: async () => new TextEncoder().encode(url).buffer }));
 const labels = (context: Context) => context.sources.map(source => source.buffer?.label.split('/').at(-1));
@@ -138,7 +141,7 @@ describe('gameplay sound lifecycle and simulation timing', () => {
   });
   afterEach(() => { audio.destroy(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-  it('unlocks lazily, preloads once, and rotates recorded gunshots through controlled category gain', async () => {
+  it('unlocks lazily, preloads once, and routes original gunshots through controlled category gain', async () => {
     audio.play([shot]);
     audio.setThrust(true);
     expect(contexts).toHaveLength(0);
@@ -149,7 +152,7 @@ describe('gameplay sound lifecycle and simulation timing', () => {
     expect(fetchSample).toHaveBeenCalledTimes(12);
     expect(context.sources).toHaveLength(0);
     audio.play([shot, shot, shot, shot]);
-    expect(labels(context)).toEqual(['rifle-1.wav', 'rifle-2.wav', 'rifle-3.wav', 'rifle-1.wav']);
+    expect(labels(context)).toEqual(['synthesized', 'synthesized', 'synthesized', 'synthesized']);
     expect(context.sources.every(source => source.playbackRate.value === 1 && sourceGain(source) === 0.72)).toBe(true);
     expect(context.gains.slice(0, 3).map(gain => gain.gain.value)).toEqual([1, 0.8, 0.85]);
     expect(context.compressor.ratio.value).toBe(12);
@@ -243,7 +246,7 @@ describe('gameplay sound lifecycle and simulation timing', () => {
     audio.setThrust(true);
     audio.play([shot]);
     expect(context.sources).toHaveLength(2);
-    expect(labels(context).at(-1)).toBe('rifle-2.wav');
+    expect(labels(context).at(-1)).toBe('synthesized');
     audio.setMuted(true);
     expect(context.gains[0].gain.value).toBe(0);
     audio.updateReload(0.82);
@@ -288,7 +291,7 @@ describe('gameplay sound lifecycle and simulation timing', () => {
     expect(context.sources.filter(source => source.stop.mock.calls.length > 0)).toHaveLength(16);
     const buffer = context.sources[0].buffer!;
     expect(buffer.label).toBe('synthesized');
-    expect(buffer.duration).toBeCloseTo(0.28, 3);
+    expect(buffer.duration).toBeCloseTo(0.19, 3);
     expect(buffer.data.every(Number.isFinite)).toBe(true);
     expect(buffer.data.some(sample => Math.abs(sample) > 0.1)).toBe(true);
     const jet = createSyntheticBuffer(context as unknown as AudioContext, 'jet').getChannelData(0);
@@ -312,6 +315,77 @@ describe('gameplay sound lifecycle and simulation timing', () => {
     expect(context.close).toHaveBeenCalledTimes(1);
     expect(context.sources).toHaveLength(0);
     expect(contexts).toHaveLength(1);
+  });
+
+  it('gives every weapon a distinct deterministic waveform with a quiet finite tail', () => {
+    const context = new Context() as unknown as AudioContext;
+    const signatures = new Set<string>();
+    for (const weapon of WEAPON_SOUND_IDS) {
+      const buffer = createSyntheticBuffer(context, `shot-${weapon}`), samples = buffer.getChannelData(0);
+      expect(samples.every(Number.isFinite)).toBe(true);
+      expect(rms(samples)).toBeGreaterThan(.035);
+      expect(rms(samples.subarray(-220))).toBeLessThan(.015);
+      expect(Array.from(samples)).toEqual(Array.from(createSyntheticBuffer(context, `shot-${weapon}`).getChannelData(0)));
+      signatures.add(`${samples.length}:${samples[120]}:${samples[410]}`);
+    }
+    expect(signatures.size).toBe(7);
+  });
+
+  it('reserves local cue capacity under remote automatic fire and never steals a kill cue for distant shots', async () => {
+    await audio.unlock(); await settle();
+    const context = contexts[0];
+    audio.playKillConfirmation();
+    const kill = context.sources[0];
+    for (let i = 0; i < 40; i++) audio.updateActor('remote', { ...standing, x: 400 }, -1, false, [shot], standing);
+    expect(audio.getDiagnostics()).toMatchObject({ voices: 21, remoteVoices: 20 });
+    expect(kill.stop).not.toHaveBeenCalled();
+    audio.play([shot]); audio.playPickup(true); audio.playDropWarning(); audio.play([shot]);
+    expect(audio.getDiagnostics().voices).toBe(24);
+    expect(kill.stop).not.toHaveBeenCalled();
+    audio.pause(); expect(audio.getDiagnostics().voices).toBe(0);
+  });
+
+  it('pans remote sources toward their world position and leaves local feedback centered', async () => {
+    class Panner extends Node { pan = new Param(); }
+    class StereoContext extends Context { panners: Panner[] = [];
+      createStereoPanner() { const panner = new Panner(); this.panners.push(panner); return panner; }
+    }
+    vi.stubGlobal('AudioContext', StereoContext);
+    await audio.unlock(); await settle();
+    const context = contexts[0] as StereoContext;
+    audio.updateActor('left', { ...standing, x: -400 }, -1, false, [shot], standing);
+    audio.updateActor('right', { ...standing, x: 400 }, -1, false, [shot], standing);
+    audio.playKillConfirmation();
+    expect(context.panners.map(panner => panner.pan.value)).toEqual([-.5, .5, 0]);
+  });
+
+  it('keeps heartbeat quiet at normal health and stops immediately on recovery, disable or pause', async () => {
+    await audio.unlock(); const context = contexts[0];
+    audio.setHeartbeat(true, 26); expect(context.sources).toHaveLength(0);
+    audio.setHeartbeat(true, 25); expect(context.sources).toHaveLength(1);
+    context.currentTime = .8; audio.setHeartbeat(true, 29); expect(context.sources).toHaveLength(1);
+    context.currentTime = 1; audio.setHeartbeat(true, 30); expect(context.sources).toHaveLength(2);
+    audio.setHeartbeat(true, 31);
+    expect(audio.getDiagnostics()).toMatchObject({ heartbeat: false, voices: 0 });
+    audio.setHeartbeat(false, 10); expect(context.sources).toHaveLength(2);
+    audio.setHeartbeat(true, 10); expect(context.sources).toHaveLength(3);
+    audio.pause(); audio.setHeartbeat(true, 10);
+    expect(audio.getDiagnostics()).toMatchObject({ heartbeat: false, voices: 0 });
+  });
+
+  it('tracks dual reload cues independently and skips history when joining an in-progress reload', async () => {
+    await audio.unlock(); await settle(); const context = contexts[0];
+    const main = createWeapon('pistol', 'main'), offhand = createWeapon('uzi', 'offhand');
+    main.reloadTicks = WEAPONS.pistol.reloadTicks; offhand.reloadTicks = 0;
+    audio.updateWeaponReloads('me', main, offhand);
+    main.reloadTicks = Math.floor(WEAPONS.pistol.reloadTicks * .75); audio.updateWeaponReloads('me', main, offhand);
+    expect(context.sources).toHaveLength(1);
+    audio.updateWeaponReloads('me', main, offhand); expect(context.sources).toHaveLength(1);
+    main.reloadTicks = 0; offhand.reloadTicks = Math.floor(WEAPONS.uzi.reloadTicks * .75);
+    audio.updateWeaponReloads('me', main, offhand); expect(context.sources).toHaveLength(2);
+    expect(context.sources[0].buffer?.data[120]).not.toBe(context.sources[1].buffer?.data[120]);
+    const remote = createWeapon('sniper', 'already-reloading'); remote.reloadTicks = 30;
+    audio.updateWeaponReloads('new-player', remote); expect(context.sources).toHaveLength(2);
   });
 
   it('does not restart voices when a pending context resume completes after pause', async () => {

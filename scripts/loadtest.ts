@@ -7,6 +7,8 @@ import { dirname, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { Client, Predict, type InputHandle, type Reconciler, type Room } from '@colyseus/sdk';
 import { DEFAULT_APPEARANCE, type ClothingColorId } from '../src/game/appearance';
+import { WEAPONS } from '../src/game/weapons';
+import { pickupDistance } from '../src/multiplayer/pickups';
 import { compileArena } from '../src/game/simulation';
 import { COMPATIBILITY_ID, MATCH_CONFIG, OUTPOST_ARENA, neutralInput, type ActorEvent, type MatchPlayer, type NetworkInput } from '../src/multiplayer/model';
 import { InputWire, MatchWire, syncPlayerWire, type PlayerWire } from '../src/multiplayer/wire';
@@ -52,6 +54,10 @@ interface Bot {
   moveIntentFrames: number;
   fireIntentFrames: number;
   shotsConfirmed: number;
+  pickupsConfirmed: number;
+  offhandShots: number;
+  punches: number;
+  weaponsUsed: Set<string>;
   hitsConfirmed: number;
   deaths: number;
   respawns: number;
@@ -150,8 +156,29 @@ function command(bot: Bot): NetworkInput {
     frame.crouchHeld = false;
   }
   bot.lastMoveX = frame.moveX;
-  frame.fireHeld = true;
-  frame.reloadPressed = me.ammo === 0 && me.reloadTicks === 0;
+  frame.fireHeld = phase % 54 < 36;
+  frame.reloadPressed = (me.ammo === 0 || (me.hasOffhand && me.offhandAmmo === 0)) && me.reloadTicks === 0 && me.offhandReloadTicks === 0;
+  frame.punchPressed = closest < 80 ** 2 && phase % 36 === 0;
+  const pickups = [...bot.room.state.pickups.values()].filter(p => p.available);
+  const wantsDual = bot.index % 2 === 0;
+  const preferred = pickups.filter(p => wantsDual ? WEAPONS[p.weaponId].dualWield : p.weaponId !== 'pistol');
+  const candidates = preferred.length ? preferred : pickups;
+  candidates.sort((a, b) => Math.hypot(a.x - me.x, a.y - me.y) - Math.hypot(b.x - me.x, b.y - me.y));
+  const sought = candidates[0];
+  const needsWeapon = me.weaponId === 'pistol' && !me.hasOffhand || wantsDual && !me.hasOffhand;
+  if (sought && needsWeapon && escapeRemaining <= 0) {
+    const dx = sought.x - me.x - me.width / 2, dy = sought.y - me.y - me.height / 2;
+    frame.moveX = Math.abs(dx) < 12 ? 0 : dx > 0 ? 1 : -1;
+    if (dy < -45) { frame.jetHeld = true; frame.jetPressed = phase % 24 === 0; frame.jumpPressed = me.grounded && phase % 24 === 0; }
+    if (dy > 70) frame.jetHeld = false;
+    frame.crouchHeld = me.grounded && bot.blockedInputFrames > 8;
+  }
+  const reachable = pickups.filter(p => pickupDistance(me, p, arena) !== null)
+    .sort((a, b) => Math.hypot(a.x - me.x, a.y - me.y) - Math.hypot(b.x - me.x, b.y - me.y))[0];
+  if (reachable && phase % 18 === 0 && (needsWeapon || phase % 180 === 0)) {
+    frame.pairPressed = wantsDual && WEAPONS[me.weaponId].dualWield && WEAPONS[reachable.weaponId].dualWield;
+    frame.pickupPressed = !frame.pairPressed;
+  }
   if (target) {
     const x = bot.predict.value(target, 'x') + target.width / 2;
     const y = bot.predict.value(target, 'y') + target.height / 2;
@@ -254,7 +281,7 @@ async function main(): Promise<void> {
       });
       const bot: Bot = { index, room, handle, predict, controller, lifeId: 0, phase: 'lobby', inputId: 0,
         connected: true, nextControlAt: 0, inputsSent: 0, moveIntentFrames: 0, fireIntentFrames: 0,
-        shotsConfirmed: 0, hitsConfirmed: 0, deaths: 0, respawns: 0, drops: 0, reconnects: 0,
+        shotsConfirmed: 0, pickupsConfirmed: 0, offhandShots: 0, punches: 0, weaponsUsed: new Set(), hitsConfirmed: 0, deaths: 0, respawns: 0, drops: 0, reconnects: 0,
         resyncs: 0, historyResyncRequests: 0, awaitingResync: false, nextHistoryResyncAt: 0, maxPendingInputs: 0, movementSamples: 0, observations: 0, aliveObservations: 0,
         blockedInputFrames: 0, lastMoveX: 0, escapeDirection: 0, escapeUntilInput: 0, navigationRecoveries: 0 };
       bots.push(bot);
@@ -274,7 +301,9 @@ async function main(): Promise<void> {
       room.onMessage('events', (events: ActorEvent[]) => {
         for (const event of events) {
           if (event.actorId !== room.sessionId) continue;
-          if (event.type === 'shot') bot.shotsConfirmed++;
+          if (event.type === 'shot') { bot.shotsConfirmed++; bot.weaponsUsed.add(event.weaponId); if (event.hand === 'offhand') bot.offhandShots++; }
+          if (event.type === 'pickup') bot.pickupsConfirmed++;
+          if (event.type === 'melee') bot.punches++;
           if (event.type === 'hit') bot.hitsConfirmed++;
           if (event.type === 'targetDeath') bot.deaths++;
           if (event.type === 'targetRespawn') bot.respawns++;
@@ -381,6 +410,8 @@ async function main(): Promise<void> {
         samples.filter(sample => sample.phase === 'playing').every(sample => sample.connectedPlayers === PLAYER_COUNT && sample.reservedPlayers === 0),
       activeMovementAndFiring: bots.length === PLAYER_COUNT && bots.every(bot => bot.shotsConfirmed >= minimumShots &&
         bot.moveIntentFrames > 0 && bot.aliveObservations > 0 && bot.movementSamples >= Math.max(1, bot.aliveObservations * 0.4)),
+      variedCombat: new Set(bots.flatMap(bot => [...bot.weaponsUsed])).size >= 4
+        && bots.some(bot => bot.offhandShots > 0) && bots.some(bot => bot.punches > 0),
       simulationP99: metrics.sampleCount > 0 && metrics.maxP99WorkMs < TICK_BUDGET_MS,
       noSustainedBacklog: metrics.longestScheduleBacklogSeconds < 30 && metrics.maxConsecutiveInputBacklogTicks < 120,
       processMemoryBelow750MB: metrics.maxRssBytes > 0 && metrics.maxRssBytes < MEMORY_LIMIT_BYTES,
@@ -389,7 +420,7 @@ async function main(): Promise<void> {
     };
     const passed = Object.values(gates).every(Boolean);
     const shortRunPassed = gates.completedRequestedDuration && gates.eightClients && gates.activeMovementAndFiring &&
-      gates.simulationP99 && gates.noSustainedBacklog && gates.processMemoryBelow750MB && gates.noErrors;
+      gates.variedCombat && gates.simulationP99 && gates.noSustainedBacklog && gates.processMemoryBelow750MB && gates.noErrors;
     const summary = {
       generatedAt: new Date().toISOString(), endpoint: config.endpoint, compatibility: COMPATIBILITY_ID,
       requestedActiveSeconds: config.seconds, activeSeconds, elapsedSeconds: (performance.now() - startTime) / 1000,
@@ -400,9 +431,9 @@ async function main(): Promise<void> {
         activeMovement: 'Every bot must show nonzero authoritative velocity in at least 40% of its alive state samples, and confirm the minimum firing activity.',
         memoryStability: 'Final five-minute RSS regression must grow no faster than 4 MiB/min, after the first minute.' },
       client: { node: process.version, maxLoopGapMs: maxClientLoopGapMs, maxInputBudget },
-      bots: bots.map(({ index, inputsSent, moveIntentFrames, fireIntentFrames, shotsConfirmed, hitsConfirmed, deaths, respawns,
+      bots: bots.map(({ index, inputsSent, moveIntentFrames, fireIntentFrames, shotsConfirmed, hitsConfirmed, deaths, respawns, pickupsConfirmed, offhandShots, punches, weaponsUsed,
         drops, reconnects, resyncs, historyResyncRequests, maxPendingInputs, movementSamples, observations, aliveObservations, navigationRecoveries, handle }) => ({ index, inputsSent, moveIntentFrames, fireIntentFrames,
-        shotsConfirmed, hitsConfirmed, deaths, respawns, drops, reconnects, resyncs, historyResyncRequests, maxPendingInputs, replayBufferSize: handle.replayBufferSize, movementSamples, observations, aliveObservations, navigationRecoveries })),
+        shotsConfirmed, hitsConfirmed, deaths, respawns, pickupsConfirmed, offhandShots, punches, weaponsUsed: [...weaponsUsed], drops, reconnects, resyncs, historyResyncRequests, maxPendingInputs, replayBufferSize: handle.replayBufferSize, movementSamples, observations, aliveObservations, navigationRecoveries })),
       failures, samples,
       limitations: ['A scripted Frankfurt load test does not validate real Canada–India player latency.',
         'Network impairment must be applied to the actual socket path; this script does not emulate TCP packet loss.'],

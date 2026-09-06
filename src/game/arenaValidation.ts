@@ -18,6 +18,10 @@ export function validateArena(value: unknown): Arena {
     (a.openFloor !== undefined && typeof a.openFloor !== 'boolean');
   const invalidSpawns = !bounded(a.playerSpawn) || !bounded(a.targetSpawn) ||
     (a.spawnPoints !== undefined && (!Array.isArray(a.spawnPoints) || !a.spawnPoints.every(p => bounded(p) && identifier(p.id)) || new Set(a.spawnPoints.map(p => p.id)).size !== a.spawnPoints.length));
+  const invalidPickups = a.pickupPads !== undefined && (!Array.isArray(a.pickupPads)
+    || !a.pickupPads.every(p => bounded(p) && identifier(p.id) && ['ordinary', 'sniper'].includes(p.kind))
+    || new Set(a.pickupPads.map(p => p.id)).size !== a.pickupPads.length
+    || a.pickupPads.filter(p => p.kind === 'sniper').length > 1);
   const invalidPlatforms = !a.platforms.every(p => bounded(p) && p.x + p.width <= a.width && p.y + p.height <= a.height);
   const invalidTerrain = a.terrain !== undefined && (!Array.isArray(a.terrain) || !a.terrain.every(polygon => {
     if (!polygon || !identifier(polygon.id) || !['rock', 'bunker', 'wood'].includes(polygon.material) ||
@@ -46,7 +50,7 @@ export function validateArena(value: unknown): Arena {
     }
     return true;
   }) || new Set(a.terrain.map(p => p.id)).size !== a.terrain.length);
-  if (invalidMetadata || invalidSpawns || invalidPlatforms || invalidTerrain) {
+  if (invalidMetadata || invalidSpawns || invalidPlatforms || invalidTerrain || invalidPickups) {
     throw new Error('The arena geometry is invalid. Retry to load it again.');
   }
   return a;

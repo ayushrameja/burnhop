@@ -66,7 +66,7 @@ export function sanitizeInput(input: NetworkInput): void {
   if (!Number.isFinite(input.aimAngle)) input.aimAngle = 0;
   else if (input.aimAngle < -Math.PI || input.aimAngle > Math.PI) input.aimAngle = Math.atan2(Math.sin(input.aimAngle), Math.cos(input.aimAngle));
   if (!Number.isSafeInteger(input.inputId) || input.inputId < 0 || input.inputId > 0xffff_ffff) input.inputId = 0;
-  for (const key of ['jumpPressed', 'jumpHeld', 'jetPressed', 'jetHeld', 'jetSeparate', 'crouchHeld', 'fireHeld', 'reloadPressed'] as const) {
+  for (const key of ['jumpPressed', 'jumpHeld', 'jetPressed', 'jetHeld', 'jetSeparate', 'crouchHeld', 'fireHeld', 'reloadPressed', 'pickupPressed', 'pairPressed', 'punchPressed'] as const) {
     input[key] = input[key] === true;
   }
 }

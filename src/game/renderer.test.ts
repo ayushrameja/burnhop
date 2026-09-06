@@ -9,6 +9,7 @@ import { calculateCharacterPose } from './character';
 import { calculateDetailedCharacterRig } from './detailedCharacter';
 import { getReloadProgress } from './reload';
 import { GRAPHICS_PRESETS } from './graphics';
+import { WEAPONS } from './weapons';
 
 // Real rendering calculations with an inert drawing surface: no browser timing assumptions.
 function setup(width = 1280, height = 720) {
@@ -39,7 +40,8 @@ describe('live visual aim', () => {
     const frozenWorld = cloneWorld(world);
     const expected = calculateDetailedCharacterRig({
       aimAngle: .3, crouchAmount: world.player.crouchAmount,
-      reloadProgress: getReloadProgress(world.player.weapon.reloadTicks, CONFIG.reloadTicks),
+      weaponId:world.player.weapon.weaponId,
+      reloadProgress: getReloadProgress(world.player.weapon.reloadTicks, WEAPONS[world.player.weapon.weaponId].reloadTicks),
     });
     for (const dt of [0, .05, 0]) {
       rotate.mockClear();
@@ -137,11 +139,11 @@ describe('camera and zoom presentation', () => {
     expect(Math.abs(counts[0] - counts[1])).toBeLessThanOrEqual(2);
     expect(counts[0]).toBeGreaterThan(0);
   });
-  it('starts with the largest pilot at 1× and makes the projected pilot smaller at 3× and 5×', () => {
+  it('starts with the largest pilot at 1× and makes the projected pilot smaller at 2.5× and 4×', () => {
     const { renderer, world } = setup();
     expect(renderer.getCameraDiagnostics().zoomLevel).toBe(1);
     const heights: number[] = [];
-    for (const level of [1, 3, 5] as ZoomLevel[]) {
+    for (const level of [1, 2.5, 4] as ZoomLevel[]) {
       renderer.setZoom(level);
       const top = renderer.worldToScreen(world.player.x, world.player.y);
       const feet = renderer.worldToScreen(world.player.x, world.player.y + world.player.height);
@@ -163,12 +165,12 @@ describe('camera and zoom presentation', () => {
     next.player.y = 600;
     renderer.render(world, next, .5, DEFAULT_APPEARANCE, [], 1 / 60);
     const anchor = { x: 1100 + CONFIG.bodyWidth / 2, y: 650 + CONFIG.bodyHeight / 2 };
-    renderer.setZoom(5);
+    renderer.setZoom(4);
     const screen = renderer.worldToScreen(anchor.x, anchor.y);
     expect(screen.x).toBeCloseTo(720, 10);
     expect(screen.y).toBeCloseTo(400, 10);
     expect(renderer.getCameraDiagnostics()).toEqual({
-      zoomLevel: 5,
+      zoomLevel: 4,
       scale: 0.75,
       position: { x: anchor.x - 1280 / 0.75 / 2, y: anchor.y - 720 / 0.75 / 2 },
       viewport: { width: 1280 / 0.75, height: 720 / 0.75 },
@@ -180,7 +182,7 @@ describe('camera and zoom presentation', () => {
     const pointer = { x: 800, y: 320 };
     renderer.setPointer(pointer.x, pointer.y);
     const before = cloneWorld(world);
-    for (const level of [5, 1, 3] as ZoomLevel[]) {
+    for (const level of [4, 1, 2.5] as ZoomLevel[]) {
       renderer.setZoom(level);
       expect(renderer.getCameraDiagnostics().scale).toBe(ZOOM_SCALES[level]);
       expect(renderer.getPointerBounds()).toEqual({ left: 80, top: 136, right: 1104, bottom: 712 });
@@ -208,7 +210,7 @@ describe('camera and zoom presentation', () => {
     world.player.x = 1100;
     world.player.y = 650;
     renderer.render(world, world, 1, DEFAULT_APPEARANCE, [], 0);
-    renderer.setZoom(5);
+    renderer.setZoom(4);
     const camera = renderer.getCameraDiagnostics().position;
     const crouched = cloneWorld(world);
     const feetY = world.player.y + world.player.height;

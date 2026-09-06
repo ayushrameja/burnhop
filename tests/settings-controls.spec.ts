@@ -88,7 +88,7 @@ test('capture owns Escape and Tab, conflict review swaps atomically, and resets 
   await bind(page, 'Reload secondary', 'Tab');
   const review = page.getByRole('dialog', { name: 'This binding is already in use.' });
   await expect(review).toBeVisible();
-  await expect(review).toContainText('Cycle zoom');
+  await expect(review).toContainText('Cycle view range');
   await expect(review).toContainText('Unbound');
   expect((await saved(page)).controls.bindings.zoom).toEqual(['Tab', null]);
   await review.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -181,7 +181,11 @@ test('pause settings retain the session, contain focus, and apply new bindings o
 test('pointer default, toggled aiming and firing, and separate jetpack work in the resumed game', async ({ page }) => {
   await openSettings(page);
   await bind(page, 'Switch aim style primary', 'KeyQ');
+  await expect(page.getByRole('dialog', { name: 'This binding is already in use.' })).toContainText('Pair weapon');
+  await page.getByRole('button', { name: 'Swap bindings', exact: true }).click();
   await bind(page, 'Fire primary', 'KeyF');
+  await expect(page.getByRole('dialog', { name: 'This binding is already in use.' })).toContainText('Punch');
+  await page.getByRole('button', { name: 'Swap bindings', exact: true }).click();
   await page.getByRole('combobox', { name: 'Fire behavior', exact: true }).selectOption('toggle');
   await page.getByRole('combobox', { name: 'Jump and jetpack controls' }).selectOption('separate');
   await expect(page.getByRole('button', { name: 'Change Jetpack primary binding' })).toBeEnabled();
@@ -270,7 +274,7 @@ test('audio sliders save keyboard edits, restore after reload and reset only the
   await expect(music).toHaveValue('7');
   await page.getByRole('checkbox', { name: 'Master sound' }).uncheck();
   const chosen = await saved(page);
-  expect(chosen.audio).toEqual({ masterVolume: 0.74, musicVolume: 0.07, weaponsVolume: 0, movementVolume: 0.67, uiVolume: 0.29 });
+  expect(chosen.audio).toEqual({ masterVolume: 0.74, musicVolume: 0.07, weaponsVolume: 0, movementVolume: 0.67, uiVolume: 0.29, feedbackVolume: 0.8 });
   expect(chosen).toMatchObject({ muted: true, reducedMotion: true, controls: { bindings: { moveLeft: ['KeyJ', null] } } });
   await page.screenshot({ path: testInfo.outputPath('settings-audio-desktop.png'), fullPage: true });
   await page.reload();

@@ -1,5 +1,9 @@
 # Gameplay sound effects
 
+Current weapon firing and reload cues are original, deterministic Web Audio buffers generated in `src/game/audioSynthesis.ts`. The pistol, revolver, AK-47, M416, UZI, UMP and sniper have separate transient/body/tail profiles. Punches, body/wood/rock impacts, dry fire, kill/pickup/drop feedback and heartbeat also use original synthesis. Recorded footsteps, landing and metal impacts below remain in use; the old rifle/reload files remain available for legacy cue callers.
+
+Gameplay uses a maximum of 24 voices, reserves four slots for local sounds, prioritizes confirmation cues over distant tails, and applies stereo position plus distance attenuation to remote actors. Feedback has a separate volume control, and the heartbeat can be disabled independently.
+
 These short, locally hosted WAV files use CC0 source recordings. No account, streaming service, or third-party runtime request is required. The original creator pages were checked on 2026-09-05.
 
 | Shipped files | Creator and source | Source file / edit |

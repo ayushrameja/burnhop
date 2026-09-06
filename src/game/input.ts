@@ -10,12 +10,16 @@ export class ActionInput {
   private jumpPressed = false;
   private jetPressed = false;
   private reloadPressed = false;
+  private pickupPressed = false;
+  private pairPressed = false;
+  private punchPressed = false;
 
   constructor(controls = defaultControls()) { this.controls = normalizeControls(controls); }
   configure(controls: ControlsSettings): void { this.controls = normalizeControls(controls); this.clear(); }
   clear(): void {
     this.held.clear(); this.toggled.clear(); this.direction = 0;
     this.jumpPressed = false; this.jetPressed = false; this.reloadPressed = false;
+    this.pickupPressed = false; this.pairPressed = false; this.punchPressed = false;
   }
   actionsFor(binding: Binding): ActionId[] {
     if (binding === 'Escape') return ['pause'];
@@ -47,6 +51,9 @@ export class ActionInput {
         } else this.jumpPressed = true;
       } else if (action === 'jetpack') this.activateJet();
       else if (action === 'reload') this.reloadPressed = true;
+      else if (action === 'pickup') this.pickupPressed = true;
+      else if (action === 'pair') this.pairPressed = true;
+      else if (action === 'punch') this.punchPressed = true;
       else {
         const behavior = behaviorFor(action);
         if (behavior && this.controls.behavior[behavior] === 'toggle') {
@@ -71,17 +78,19 @@ export class ActionInput {
     return true;
   }
   release(binding: Binding): void { this.held.delete(binding); }
-  snapshot(): Pick<InputCommand, 'moveX' | 'jumpPressed' | 'jumpHeld' | 'crouchHeld' | 'fireHeld' | 'reloadPressed' | 'jetpack'> {
+  snapshot(): Pick<InputCommand, 'moveX' | 'jumpPressed' | 'jumpHeld' | 'crouchHeld' | 'fireHeld' | 'reloadPressed' | 'jetpack' | 'pickupPressed' | 'pairPressed' | 'punchPressed'> {
     return {
       moveX: (Number(this.active('moveRight')) - Number(this.active('moveLeft'))) as -1 | 0 | 1,
       jumpPressed: this.jumpPressed, jumpHeld: this.physicalHeld('jump'),
       crouchHeld: this.active('crouch'), fireHeld: this.active('fire'), reloadPressed: this.reloadPressed,
+      pickupPressed: this.pickupPressed, pairPressed: this.pairPressed, punchPressed: this.punchPressed,
       jetpack: { source: this.controls.jetpackSource, pressed: this.jetPressed, held: this.active('jetpack') },
     };
   }
   consumeTick(): ReturnType<ActionInput['snapshot']> {
     const command = this.snapshot();
     this.jumpPressed = false; this.jetPressed = false; this.reloadPressed = false;
+    this.pickupPressed = false; this.pairPressed = false; this.punchPressed = false;
     return command;
   }
   reconcile(player: PlayerState, events: GameEvent[]): void {

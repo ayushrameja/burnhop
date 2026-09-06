@@ -1,0 +1,4 @@
+.combat-feedback { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
+.combat-feedback-edge { position: absolute; inset: 0; opacity: 0; will-change: opacity; }
+.combat-feedback-damage { background: linear-gradient(90deg, #ef3934 0%, transparent 12%, transparent 88%, #ef3934 100%); }
+.combat-feedback-kill { background: linear-gradient(90deg, #428dff 0%, transparent 12%, transparent 88%, #428dff 100%); }

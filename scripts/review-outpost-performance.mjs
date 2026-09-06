@@ -14,7 +14,10 @@ try {
     await installCapture(page);
     await openMenu(page, `http://127.0.0.1:5173/?map=${map}`);
     await enterPractice(page);
-    for (const zoom of [1, 3, 5]) {
+    await page.keyboard.press('Escape');
+    await page.getByRole('combobox', { name: 'Practice weapon', exact: true }).selectOption('sniper');
+    await page.getByRole('button', { name: 'Resume', exact: true }).click();
+    for (const zoom of [1, 1.5, 2, 2.5, 4]) {
       if (zoom !== 1) await page.keyboard.press('Tab');
       await page.waitForTimeout(600);
       const sample = await page.evaluate(async () => {

@@ -9,8 +9,9 @@ export function stepPredictedActor(player: PlayerState, input: NetworkInput, are
     moveX: input.moveX, jumpPressed: input.jumpPressed, jumpHeld: input.jumpHeld,
     jetpack: { source: input.jetSeparate ? 'separate' : 'combined', pressed: input.jetPressed, held: input.jetHeld },
     crouchHeld: input.crouchHeld, fireHeld: input.fireHeld, reloadPressed: input.reloadPressed, aimAngle: input.aimAngle,
+    pickupPressed: input.pickupPressed, pairPressed: input.pairPressed, punchPressed: input.punchPressed,
   }, arena).map((event, index) => ({ ...event,
     id: `predicted:${player.id}:${lifeId}:${input.inputId}:${index}`, actorId: player.id, lifeId, inputId: input.inputId,
-    ...(event.type === 'shot' ? { shotId: `${player.id}:${lifeId}:${input.inputId}` } : {}),
+    ...(event.type === 'shot' ? { shotId: `${player.id}:${lifeId}:${event.instanceId}:${event.hand}:${event.shotCounter}` } : {}),
   }));
 }

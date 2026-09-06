@@ -1,17 +1,13 @@
 import { useEffect, useRef } from 'react';
 import type { DetailedAppearance } from './game/appearance';
-import type { CharacterPose } from './game/character';
-import { drawDetailedCharacter } from './game/detailedCharacter';
+import { drawDancingCharacter } from './game/detailedCharacter';
+import { danceBeat } from './DancePilot';
 
 interface MenuBackdropProps {
   appearance: DetailedAppearance;
   reducedMotion: boolean;
+  getDanceTime: () => number | null;
 }
-
-const smooth = (value: number) => {
-  const t = Math.max(0, Math.min(1, value));
-  return t * t * (3 - 2 * t);
-};
 
 function polygon(ctx: CanvasRenderingContext2D, color: string | CanvasGradient, points: number[]) {
   ctx.fillStyle = color;
@@ -111,7 +107,7 @@ function drawHangar(ctx: CanvasRenderingContext2D, width: number, height: number
   ctx.fillRect(0, 0, width, height);
 }
 
-export default function MenuBackdrop({ appearance, reducedMotion }: MenuBackdropProps) {
+export default function MenuBackdrop({ appearance, reducedMotion, getDanceTime }: MenuBackdropProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -128,6 +124,7 @@ export default function MenuBackdrop({ appearance, reducedMotion }: MenuBackdrop
     let animation = 0;
     let elapsed = 0;
     let previousFrame: number | null = null;
+    let lastDraw = -Infinity;
     let disposed = false;
 
     const draw = () => {
@@ -135,33 +132,10 @@ export default function MenuBackdrop({ appearance, reducedMotion }: MenuBackdrop
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
       ctx.drawImage(scenery, 0, 0, width, height);
 
-      const time = reducedMotion ? 7 : elapsed / 1000;
-      const cycle = time % 16;
-      const forward = smooth(cycle / 6);
-      const back = smooth((cycle - 11) / 5);
-      const travel = forward - back;
-      const walking = reducedMotion ? 0 : cycle < 6
-        ? smooth(cycle / .8) * (1 - smooth((cycle - 5.2) / .8))
-        : smooth((cycle - 11) / .8) * (1 - smooth((cycle - 15.2) / .8));
-      const direction = cycle < 6 ? 1 : -1;
-      const aim = .10 - smooth((cycle - 5.3) / 1.2) * .20 + smooth((cycle - 10) / 1.2) * .20;
-      const shotAge = Math.min(...[7.15, 8.6, 10.05].map(shot => cycle >= shot ? cycle - shot : Infinity));
-      const recoil = reducedMotion || shotAge > .18 ? 0 : (1 - shotAge / .18) * .65;
+      const beat = danceBeat(getDanceTime() ?? elapsed / 1000, reducedMotion);
       const scale = Math.min(height / 150, width / 112);
-      const pilotX = width * .715 + (travel - .5) * Math.min(width * .045, 70);
+      const pilotX = width * .715;
       const pilotY = height * .853;
-      const pose: CharacterPose = {
-        aimAngle: aim,
-        crouchAmount: .035 * (1 - walking),
-        locomotion: true,
-        moving: walking > .01,
-        walkAmount: walking,
-        moveSpeed: direction * 320,
-        walkPhase: time * 10.5,
-        recoil,
-        time,
-        reducedMotion,
-      };
 
       const shadow = ctx.createRadialGradient(pilotX, pilotY + 5, 0, pilotX, pilotY + 5, scale * 32);
       shadow.addColorStop(0, '#070b0ca6');
@@ -175,7 +149,7 @@ export default function MenuBackdrop({ appearance, reducedMotion }: MenuBackdrop
       ctx.restore();
 
       // The production vector renderer needs no decoded image assets.
-      drawDetailedCharacter(ctx, pilotX, pilotY, scale, pose, appearance);
+      drawDancingCharacter(ctx, pilotX, pilotY, scale, appearance, beat, reducedMotion);
 
       const vignette = ctx.createLinearGradient(0, 0, 0, height);
       vignette.addColorStop(0, '#09101435');
@@ -201,7 +175,7 @@ export default function MenuBackdrop({ appearance, reducedMotion }: MenuBackdrop
       if (disposed || document.hidden || reducedMotion) return;
       if (previousFrame !== null) elapsed += Math.min(now - previousFrame, 100);
       previousFrame = now;
-      draw();
+      if (now - lastDraw >= 1000 / 30 - .5) { draw(); lastDraw = now; }
       animation = requestAnimationFrame(animate);
     };
     const visibility = () => {
@@ -225,7 +199,7 @@ export default function MenuBackdrop({ appearance, reducedMotion }: MenuBackdrop
       document.removeEventListener('visibilitychange', visibility);
       cancelAnimationFrame(animation);
     };
-  }, [appearance, reducedMotion]);
+  }, [appearance, reducedMotion, getDanceTime]);
 
-  return <canvas ref={canvasRef} className="menu-backdrop" role="img" aria-label="Pilot training in the hangar" />;
+  return <canvas ref={canvasRef} className="menu-backdrop" role="img" aria-label="Pilot dancing in the hangar" />;
 }

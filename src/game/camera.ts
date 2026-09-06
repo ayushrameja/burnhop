@@ -1,20 +1,34 @@
 import type { Arena, Vec2 } from './types';
+import { WEAPONS } from './weapons';
+import type { PlayerState } from './types';
 
-export type ZoomLevel = 1 | 3 | 5;
+export type ZoomLevel = 1 | 1.5 | 2 | 2.5 | 4;
 export const DEFAULT_ZOOM_LEVEL: ZoomLevel = 1;
 
-/** View presets: 1× is close, 5× shows the most arena; 3× retains the original scale. */
+/** View tiers, not optical magnification: higher values show more arena. */
 export const ZOOM_SCALES: Readonly<Record<ZoomLevel, number>> = Object.freeze({
   1: 1.5,
-  3: 1.1,
-  5: 0.75,
+  1.5: 1.35,
+  2: 1.2,
+  2.5: 1.1,
+  4: 0.75,
 });
 export const CAMERA_VIEWPORT = Object.freeze({ width: 1280, height: 720 });
 const FLOOR_PADDING = 95;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
-export function nextZoomLevel(level: ZoomLevel): ZoomLevel {
-  return level === 1 ? 3 : level === 3 ? 5 : 1;
+export const VIEW_TIERS: readonly ZoomLevel[] = [1, 1.5, 2, 2.5, 4];
+export function allowedViewLevels(player?: Pick<PlayerState, 'weapon' | 'offhand'>): readonly ZoomLevel[] {
+  if (!player) return VIEW_TIERS;
+  const max = player.offhand ? 1 : WEAPONS[player.weapon.weaponId].viewRange;
+  return VIEW_TIERS.filter(tier => tier <= max);
+}
+export function clampViewLevel(level: ZoomLevel, player: Pick<PlayerState, 'weapon' | 'offhand'>): ZoomLevel {
+  return allowedViewLevels(player).filter(tier => tier <= level).at(-1) ?? 1;
+}
+export function nextZoomLevel(level: ZoomLevel, player?: Pick<PlayerState, 'weapon' | 'offhand'>): ZoomLevel {
+  const allowed = allowedViewLevels(player);
+  return allowed[(allowed.indexOf(level) + 1) % allowed.length];
 }
 
 type CameraArena = Pick<Arena, 'width' | 'floorY'>;

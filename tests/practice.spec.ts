@@ -1,4 +1,5 @@
 import { installCapture, openMenu, enterMenu, moveAim } from './helpers/capture';
+import { choosePracticeLoadout, cycleViewTo } from './helpers/combat';
 import { test, expect, type Page } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 
@@ -149,9 +150,8 @@ test('early landing presses chain bunny hops without spending jet fuel', async (
 
 test('aiming, target death and respawn, reload, resize, pause and focus recovery', async ({ page }) => {
   await enter(page);
-  // Use the medium view so the spawn target can be aimed at on screen.
-  await page.keyboard.press('Tab');
-  await expect(page.getByTestId('zoom-level')).toContainText('3x');
+  await choosePracticeLoadout(page, 'm416');
+  await cycleViewTo(page, 2.5);
   await aimTarget(page);
   await page.mouse.down();
   await page.waitForFunction(() => window.__BURNHOP__!.snapshot().kills >= 1);
@@ -188,7 +188,7 @@ test('aiming, target death and respawn, reload, resize, pause and focus recovery
   await page.getByRole('button', { name: 'Restart practice', exact: true }).click();
   await page.waitForFunction(() => window.__BURNHOP__!.metrics().running);
   expect((await snapshot(page)).shotsFired).toBe(0);
-  expect((await snapshot(page)).player.weapon.ammo).toBe(30);
+  expect((await snapshot(page)).player.weapon.ammo).toBe(12);
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Back to menu', exact: true }).click();
   await expect(page.getByTestId('menu-screen')).toBeVisible();

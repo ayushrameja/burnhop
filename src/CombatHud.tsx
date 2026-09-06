@@ -1,7 +1,8 @@
-import type { HudState } from './game/types';
+import type { HudState, WeaponId } from './game/types';
+import { WEAPONS } from './game/weapons';
+import { WEAPON_SILHOUETTES } from './game/weaponArtwork';
 import './CombatHud.css';
 
-const MAGAZINE_CAPACITY = 30;
 const percentage = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
 
 const FUEL_SEGMENTS = Array.from({ length: 12 }, (_, index) => {
@@ -17,12 +18,31 @@ function FuelGauge({ fuel }: { fuel: number }) {
   </svg>;
 }
 
-function RifleIcon() {
-  return <svg className="ammo-weapon-icon" aria-hidden="true" viewBox="0 0 100 34" fill="currentColor">
-    <path d="M3 13h17l6-5h37v4h20v3h14v4H80v3H58l-5 9H42l3-12h-8l-6 9h-8l4-10H17l-5 5H3V13Z" />
-    <path d="M35 3h18v4H35zM65 9h5v5h-5z" />
-    <path d="M33 12h22v2H33zM61 16h16v2H61z" fill="#151b1f" />
+function WeaponIcon({weaponId}:{weaponId:WeaponId}) {
+  return <svg className="ammo-weapon-icon" aria-hidden="true" viewBox="-21 -15 68 33" fill="currentColor">
+    <path d={WEAPON_SILHOUETTES[weaponId]} />
+    {weaponId!=='revolver' && <path d={weaponId==='pistol'?'M3 7h4v7H2z':weaponId==='uzi'?'M3 7h5v11H3z':'M9 4h6l1 11-6 1z'}/>}
   </svg>;
+}
+
+function AmmoRow({weaponId,ammo,magazineSize,reserve,reloadProgress,offhand=false}:{weaponId:WeaponId;ammo:number;magazineSize:number;reserve:number;reloadProgress:number;offhand?:boolean}){
+  ammo=Math.max(0,Math.min(magazineSize,Math.round(ammo)));
+  const reloading=reloadProgress>=0,progress=Math.max(0,Math.min(1,reloadProgress));
+  const warning=ammo===0?(reserve===0?'OUT OF AMMO':'RELOAD REQUIRED'):ammo<=Math.max(2,Math.floor(magazineSize*.2))?'LOW AMMO':'';
+  return <div className="ammo-row" data-hand={offhand?'offhand':'main'} data-ammo-warning={Boolean(warning)&&!reloading} data-reloading={reloading}>
+    <div className="ammo-heading"><span className="combat-hud-label">{offhand?'OFF HAND':'MAIN HAND'}</span><WeaponIcon weaponId={weaponId}/></div>
+    <div className="ammo-magazine" role="group" aria-label={`${WEAPONS[weaponId].name}: ${ammo} rounds remaining, ${magazineSize} round magazine capacity`}>
+      <b className="ammo-rounds" data-testid={offhand?'hud-offhand-ammo':'hud-ammo'}>{ammo.toString().padStart(2,'0')}</b>
+      <span className="ammo-divider" aria-hidden="true">/</span>
+      <div className="ammo-capacity"><span>{magazineSize}</span><small>MAG SIZE</small></div>
+      <div className="ammo-reserve" aria-label={reserve<0?'Unlimited reserve':`${reserve} reserve rounds`}><b>{reserve<0?'∞':reserve}</b><small>RESERVE</small></div>
+    </div>
+    <div className="ammo-footer"><span className="ammo-weapon-name">{WEAPONS[weaponId].name}</span><span className="ammo-state" role="status">{reloading?'RELOADING':warning}</span></div>
+    <div className="ammo-progress" role={reloading?'progressbar':undefined} aria-label={reloading?(offhand?'Offhand reloading':'Reloading'):undefined}
+      aria-valuenow={reloading?Math.round(progress*100):undefined} aria-valuemin={reloading?0:undefined} aria-valuemax={reloading?100:undefined}>
+      <div style={{width:`${reloading?progress*100:ammo/magazineSize*100}%`}}/>
+    </div>
+  </div>;
 }
 
 /** Two edge clusters keep fuel, health and magazine state out of the aiming area. */
@@ -30,11 +50,8 @@ export default function CombatHud({ hud }: { hud: HudState }) {
   // Reserve 0% for an empty tank; a usable fraction must not look depleted.
   const fuel = Math.max(0, Math.min(100, Math.ceil(hud.fuel)));
   const health = percentage(hud.health);
-  const ammo = Math.max(0, Math.min(MAGAZINE_CAPACITY, Math.round(hud.ammo)));
   const fuelWarning = hud.fuel <= 0 ? 'FUEL EMPTY' : hud.fuel < 20 ? 'LOW FUEL' : '';
-  const reloading = hud.reloadProgress >= 0;
-  const reloadProgress = Math.max(0, Math.min(1, hud.reloadProgress));
-  const ammoWarning = ammo === 0 ? 'RELOAD REQUIRED' : ammo <= 5 ? 'LOW AMMO' : '';
+  const weaponId=hud.weaponId??'pistol';
 
   return <>
     <section className="pilot-hud" aria-label="Jet fuel and health" data-fuel-warning={Boolean(fuelWarning)}>
@@ -55,18 +72,11 @@ export default function CombatHud({ hud }: { hud: HudState }) {
       </div>
     </section>
 
-    <section className="combat-hud burnhop-ammo-hud" aria-label="Ammunition" data-ammo-warning={Boolean(ammoWarning) && !reloading} data-reloading={reloading}>
-      <div className="ammo-heading"><span className="combat-hud-label">AMMO</span><RifleIcon /></div>
-      <div className="ammo-magazine" role="group" aria-label={`${ammo} rounds remaining, ${MAGAZINE_CAPACITY} round magazine capacity`}>
-        <b className="ammo-rounds" data-testid="hud-ammo">{ammo.toString().padStart(2, '0')}</b>
-        <span className="ammo-divider" aria-hidden="true">/</span>
-        <div className="ammo-capacity"><span>{MAGAZINE_CAPACITY}</span><small>MAG SIZE</small></div>
-      </div>
-      <div className="ammo-footer"><span className="ammo-weapon-name">AR–01</span><span className="ammo-state" role="status">{reloading ? 'RELOADING' : ammoWarning}</span></div>
-      <div className="ammo-progress" role={reloading ? 'progressbar' : undefined} aria-label={reloading ? 'Reloading' : undefined}
-        aria-valuenow={reloading ? Math.round(reloadProgress * 100) : undefined} aria-valuemin={reloading ? 0 : undefined} aria-valuemax={reloading ? 100 : undefined}>
-        <div style={{ width: `${reloading ? reloadProgress * 100 : ammo / MAGAZINE_CAPACITY * 100}%` }} />
-      </div>
+    <section className="combat-hud burnhop-ammo-hud" aria-label="Ammunition" data-dual={Boolean(hud.offhand)}>
+      <AmmoRow weaponId={weaponId} ammo={hud.ammo} magazineSize={hud.magazineSize??WEAPONS[weaponId].magazineSize} reserve={hud.reserve??-1} reloadProgress={hud.reloadProgress}/>
+      {hud.offhand && <AmmoRow {...hud.offhand} offhand/>}
     </section>
+    {hud.pickupPrompt && <div className="combat-pickup-prompt" role="status">{hud.pickupPrompt}</div>}
+    {hud.sniperWarning && <div className="combat-sniper-warning" role="status"><span aria-hidden="true">↓</span>{hud.sniperWarning}</div>}
   </>;
 }

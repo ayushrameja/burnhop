@@ -133,7 +133,7 @@ describe('typed appearance catalog', () => {
 describe('versioned settings and migration', () => {
   it('creates independent default appearances and follows the system motion preference until saved', () => {
     const a = readSettings(true, new MemoryStorage()), b = readSettings(false, new MemoryStorage());
-    expect(a).toEqual({ version: 3, appearance: DEFAULT_APPEARANCE, savedLooks: [], muted: false, reducedMotion: true, controls: defaultControls(), audio: defaultAudioSettings(), graphics: defaultGraphics() });
+    expect(a).toEqual({ version: 3, appearance: DEFAULT_APPEARANCE, savedLooks: [], muted: false, reducedMotion: true, controls: defaultControls(), audio: defaultAudioSettings(), graphics: defaultGraphics(), feedback: { intensity: 1, heartbeat: true } });
     expect(b.reducedMotion).toBe(false);
     a.appearance.build = 'slim';
     expect(b.appearance.build).toBe('standard');
@@ -159,7 +159,7 @@ describe('versioned settings and migration', () => {
   it('clamps finite audio gains and defaults each malformed channel independently', () => {
     expect(normalizeAudioSettings({ masterVolume: 2, musicVolume: -0.5, weaponsVolume: 0.43,
       movementVolume: '0.25', uiVolume: NaN, extra: 1 }))
-      .toEqual({ masterVolume: 1, musicVolume: 0, weaponsVolume: 0.43, movementVolume: 0.85, uiVolume: 1 });
+      .toEqual({ masterVolume: 1, musicVolume: 0, weaponsVolume: 0.43, movementVolume: 0.85, uiVolume: 1, feedbackVolume: .8 });
     expect(normalizeAudioSettings({ masterVolume: Infinity, musicVolume: -Infinity, weaponsVolume: null,
       movementVolume: false, uiVolume: 0 })).toEqual({ ...defaultAudioSettings(), uiVolume: 0 });
     for (const invalid of [undefined, null, 1, 'loud', [], true]) {
@@ -170,7 +170,7 @@ describe('versioned settings and migration', () => {
   it('round-trips a saved audio mix and preserves silent channels', () => {
     const storage = new MemoryStorage();
     const settings = { ...defaultSettings(false), muted: true,
-      audio: { masterVolume: 0.74, musicVolume: 0.06, weaponsVolume: 0, movementVolume: 0.67, uiVolume: 0.29 } };
+      audio: { masterVolume: 0.74, musicVolume: 0.06, weaponsVolume: 0, movementVolume: 0.67, uiVolume: 0.29, feedbackVolume: .8 } };
     expect(writeSettings(settings, storage)).toBe(true);
     expect(readSettings(true, storage)).toEqual(settings);
     storage.seed(SETTINGS_STORAGE_KEY, { ...settings, audio: { ...settings.audio, musicVolume: 'invalid', movementVolume: 5 } });

@@ -7,12 +7,16 @@ import { BOT_APPEARANCE, type DetailedAppearance } from './appearance';
 import { getAimDash, resolveWeaponAim, type AimMode } from './aim';
 import { CAMERA_VIEWPORT, DEFAULT_ZOOM_LEVEL, ZOOM_SCALES, followCamera, getCameraTarget, type ZoomLevel } from './camera';
 import { OUTPOST_PALETTE as NIGHT } from './palette';
-import { CONFIG, getWeaponOrigin } from './simulation';
+import { CONFIG, getWeaponOrigin, compileArena } from './simulation';
 import { CHARACTER_SCALE } from './stance';
 import { getReloadProgress } from './reload';
 import { OutpostScenery } from './outpostRenderer';
 import { defaultGraphics, normalizeGraphics, type GraphicsSettings } from './graphics';
 import { CharacterParts } from './characterParts';
+import { DeathFragments } from './deathFragments';
+import { drawWeaponArtwork } from './weaponArtwork';
+import { MELEE_CONFIG, WEAPONS } from './weapons';
+import { getHitRegions } from './combat';
 import type { GameAssets } from './assets';
 import type {
   GameEvent,
@@ -20,6 +24,7 @@ import type {
   Rect,
   Vec2,
   WorldState,
+  WeaponId,
 } from './types';
 
 type Particle = {
@@ -65,8 +70,14 @@ export interface OnlineRenderActor {
   protected: boolean;
   lifeId: number;
 }
-export type PresentationEvent = GameEvent & { actorId?: string; targetId?: string };
-type ActorAnimation = { phase: number; direction: number; walk: number; air: number; thrust: number; recoil: number; hit: number; lifeId: number };
+export interface CombatPresentation {
+  pickups:ReadonlyArray<{id:string;weaponId:WeaponId;x:number;y:number;available:boolean}>;
+  sniperDrop?:{x:number;y:number;seconds:number}|null;
+  showHitRegions?:boolean;
+  highlightedPickupId?:string;
+}
+export type PresentationEvent = GameEvent & { id?:string;actorId?: string; targetId?: string;killerId?:string;lifeId?:number };
+type ActorAnimation = { phase: number; direction: number; walk: number; air: number; thrust: number; recoil: number;offhandRecoil:number; hit: number; lifeId: number };
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 const seed = (n: number) => {
@@ -141,8 +152,11 @@ export class GameRenderer {
   private tracers: Tracer[] = [];
   private labels: FloatLabel[] = [];
   private recoil = 0;
+  private offhandRecoil=0;
   private hitConfirm = 0;
   private localHit = 0;
+  private fragments=new DeathFragments();
+  private deathEvents=new Set<string>();
   private time = 0;
   private phase = 0;
   private lastMoveDirection = 1;
@@ -189,6 +203,7 @@ export class GameRenderer {
     return { graphics: { ...this.graphics }, canvas: { width: this.canvas.width, height: this.canvas.height },
       devicePixelRatio: window.devicePixelRatio || 1, zoom: this.zoomLevel,
       drawnActors: this.drawnActors, culledActors: this.culledActors, particles: this.particles.length,
+      deathFragments:this.fragments.count,
       characterCacheBytes: this.characterParts.cacheBytes, terrain: this.outpost?.getDiagnostics() ?? null };
   }
   prewarmSpawn(point: Vec2): void {
@@ -293,19 +308,22 @@ export class GameRenderer {
     this.labels = [];
     this.reticle = null;
     this.actorAnimations.clear();
+    this.fragments.clear();this.deathEvents.clear();
   }
-  resetOnlinePresentation(): void {
+  resetOnlinePresentation(preserveDebris=false): void {
     this.initialized = false; this.recoil = 0; this.hitConfirm = 0; this.localHit = 0; this.phase = 0;
     this.walkAmount = 0; this.airborneAmount = 0; this.thrustAmount = 0;
     this.particles = []; this.tracers = []; this.labels = []; this.reticle = null; this.exhaustTime = 0;
+    this.offhandRecoil=0;
+    if(!preserveDebris){this.fragments.clear();this.deathEvents.clear();}
   }
   renderOnline(actors: OnlineRenderActor[], localId: string, tick: number, events: PresentationEvent[], dt: number,
-    reducedMotion = false, aimMode: AimMode = 'radial', liveAim?: LiveAimInput): void {
+    reducedMotion = false, aimMode: AimMode = 'radial', liveAim?: LiveAimInput,combat?:CombatPresentation): void {
     const local = actors.find(actor => actor.player.id === localId) ?? actors[0];
     if (!local) return;
     const world: WorldState = { tick, player: local.player, target: { id: '', x: 0, y: 0, width: 0, height: 0, health: 0, respawnTicks: 0, hitTicks: 0 },
       shotsFired: 0, hits: 0, kills: 0 };
-    this.render(world, world, 1, local.appearance, events, dt, false, reducedMotion, aimMode, liveAim, actors);
+    this.render(world, world, 1, local.appearance, events, dt, false, reducedMotion, aimMode, liveAim, actors,combat);
   }
   render(
     previous: WorldState,
@@ -319,10 +337,12 @@ export class GameRenderer {
     aimMode: AimMode = 'radial',
     liveAim?: LiveAimInput,
     onlineActors?: OnlineRenderActor[],
+    combat?:CombatPresentation,
   ) {
     const ctx = this.ctx;
     const player = current.player;
     const arena = this.assets.arena;
+    const elapsed=dt;
     dt = clamp(dt, 0, 0.06);
     this.time += dt;
     this.frameMs = mix(this.frameMs, dt * 1000, 0.04);
@@ -354,6 +374,7 @@ export class GameRenderer {
       : { angle: player.aimAngle, pivot: getWeaponOrigin(displayedPlayer) };
     this.renderedAimAngle = aimAngle;
     this.recoil = Math.max(0, this.recoil - dt * 16);
+    this.offhandRecoil=Math.max(0,this.offhandRecoil-dt*16);
     this.hitConfirm = Math.max(0, this.hitConfirm - dt);
     this.localHit = Math.max(0, this.localHit - dt);
     if (player.grounded) this.phase += Math.abs(player.vx) * dt * 0.045;
@@ -383,7 +404,12 @@ export class GameRenderer {
       airborne: !player.grounded,
       thrusting: player.thrusting,
       recoil: this.recoil,
-      reloadProgress: getReloadProgress(player.weapon.reloadTicks, CONFIG.reloadTicks),
+      weaponId:player.weapon.weaponId,
+      offhandWeaponId:player.offhand?.weaponId,
+      offhandRecoil:this.offhandRecoil,
+      reloadProgress: getReloadProgress(player.weapon.reloadTicks, WEAPONS[player.weapon.weaponId].reloadTicks),
+      offhandReloadProgress:player.offhand?getReloadProgress(player.offhand.reloadTicks,WEAPONS[player.offhand.weaponId].reloadTicks):-1,
+      meleeProgress:player.meleeWindupTicks>0?1-player.meleeWindupTicks/MELEE_CONFIG.windupTicks:undefined,
       time: this.time,
       reducedMotion,
     };
@@ -392,12 +418,23 @@ export class GameRenderer {
       this.event(event, reducedMotion, localEvent);
       if (event.type === 'shot' && !localEvent && event.actorId) {
         const animation = this.actorAnimations.get(event.actorId);
-        if (animation) animation.recoil = 1;
+        if (animation) {if(event.hand==='offhand')animation.offhandRecoil=1;else animation.recoil = 1;}
       }
       if (event.type === 'hit' && event.targetId) {
         if (event.targetId === player.id) this.localHit = 0.12;
         const animation = this.actorAnimations.get(event.targetId);
         if (animation) animation.hit = 0.12;
+      }
+      if(event.type==='targetDeath'){
+        const deathKey=event.id??`${current.tick}:${event.actorId??'target'}:${event.lifeId??0}`;
+        if(!this.deathEvents.has(deathKey)){
+          this.deathEvents.add(deathKey);if(this.deathEvents.size>128)this.deathEvents.delete(this.deathEvents.values().next().value!);
+          const victim=onlineActors?.find(actor=>actor.player.id===event.actorId);
+          const body=victim?.player??(!onlineActors?current.target:player);
+          this.fragments.spawn(event.deathPose??{...body,aimAngle:victim?.player.aimAngle??Math.PI,crouchAmount:victim?.player.crouchAmount??0,
+            vx:victim?.player.vx??0,vy:victim?.player.vy??0,appearance:victim?.appearance??BOT_APPEARANCE},
+            event.impactDirection??{x:Math.cos(player.aimAngle),y:Math.sin(player.aimAngle)},event.cosmeticSeed??current.tick,this.graphics.effects,reducedMotion);
+        }
       }
     }
     for (const p of this.particles) {
@@ -409,8 +446,10 @@ export class GameRenderer {
     compactEffects(this.particles, 0);
     compactEffects(this.tracers, dt);
     compactEffects(this.labels, dt);
+    this.fragments.update(elapsed,compileArena(arena).solids,arena.height);
     // Character and exhaust share one pose, including transitions and left-facing mirrors.
     pose.recoil = this.recoil;
+    pose.offhandRecoil=this.offhandRecoil;
     if (onlineActors) pose.hit = this.localHit > 0;
     const exhaustRate = this.graphics.effects === 'low' ? 0 : this.graphics.effects === 'medium' ? 15 : 30;
     this.exhaustTime = player.thrusting && !reducedMotion ? this.exhaustTime + dt * exhaustRate : 0;
@@ -454,6 +493,8 @@ export class GameRenderer {
       this.ground();
       this.rangeProps(current);
     }
+    if(combat)this.drawPickups(combat,reducedMotion);
+    this.fragments.draw(ctx,this.camera,{x:1280/this.zoom,y:720/this.zoom},this.characterParts);
     // Contact shadows stay on the ground and disappear naturally as the pilot climbs.
     const shadowY = this.outpost ? feetY : arena.floorY;
     const groundDistance = this.outpost && !player.grounded ? 1000 : Math.max(0, shadowY - py - player.height);
@@ -557,6 +598,14 @@ export class GameRenderer {
       );
       ctx.restore();
     }
+    if(debug||combat?.showHitRegions){
+      const bodies=onlineActors?onlineActors.filter(actor=>actor.player.health>0).map(actor=>actor.player):[displayedPlayer,current.target];
+      for(const body of bodies)for(const {region,rect} of getHitRegions(body)){
+        ctx.fillStyle=region==='head'?'#f1b76633':region==='body'?'#70cad333':'#ad99dd33';
+        ctx.strokeStyle=region==='head'?'#e9b45f':region==='body'?'#53b8c5':'#a38fd0';ctx.lineWidth=.8;
+        ctx.fillRect(rect.x,rect.y,rect.width,rect.height);ctx.strokeRect(rect.x,rect.y,rect.width,rect.height);
+      }
+    }
     if (debug) {
       ctx.lineWidth = 1;
       ctx.strokeStyle = '#a92931';
@@ -579,8 +628,8 @@ export class GameRenderer {
         ctx,
         pivot.x,
         pivot.y,
-        pivot.x + Math.cos(aimAngle) * CONFIG.muzzleLength,
-        pivot.y + Math.sin(aimAngle) * CONFIG.muzzleLength,
+        pivot.x + Math.cos(aimAngle) * WEAPONS[player.weapon.weaponId].muzzleLength,
+        pivot.y + Math.sin(aimAngle) * WEAPONS[player.weapon.weaponId].muzzleLength,
         '#a92931',
         1.5,
       );
@@ -613,11 +662,40 @@ export class GameRenderer {
     }
     ctx.restore();
   }
+  private drawPickups(combat:CombatPresentation,reducedMotion:boolean):void{
+    const ctx=this.ctx;
+    for(const pickup of combat.pickups){
+      if(pickup.x<this.camera.x-70||pickup.x>this.camera.x+1280/this.zoom+70||pickup.y<this.camera.y-70||pickup.y>this.camera.y+720/this.zoom+70)continue;
+      const highlighted=pickup.id===combat.highlightedPickupId;
+      ctx.save();ctx.translate(pickup.x,pickup.y);
+      ctx.strokeStyle=pickup.weaponId==='sniper'?'#f0c26a':highlighted?'#c5fff0':'#83bfc0';ctx.lineWidth=highlighted?2:1;
+      ctx.globalAlpha=pickup.available?1:.3;ctx.fillStyle=pickup.available?'#263d3dcc':'#263d3d44';
+      ctx.beginPath();ctx.ellipse(0,18,27,5,0,0,Math.PI*2);ctx.fill();ctx.stroke();
+      if(pickup.available){
+        const bob=reducedMotion?0:Math.sin(this.time*2.5+pickup.x*.03)*2;
+        ctx.translate(-5,-3+bob);ctx.scale(1.2,1.2);drawWeaponArtwork(ctx,pickup.weaponId);
+        if(highlighted){ctx.strokeStyle='#d2fff2';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(-27,-14);ctx.lineTo(-27,-20);ctx.lineTo(-21,-20);ctx.moveTo(43,-14);ctx.lineTo(43,-20);ctx.lineTo(37,-20);ctx.stroke();}
+      }
+      ctx.restore();
+    }
+    if(combat.sniperDrop){
+      const drop=combat.sniperDrop,progress=clamp(drop.seconds/5,0,1),height=reducedMotion?45:45+progress*390;
+      ctx.save();ctx.translate(drop.x,drop.y);ctx.strokeStyle='#e7c17899';ctx.lineWidth=1;ctx.setLineDash([4,6]);
+      ctx.beginPath();ctx.moveTo(0,-height+18);ctx.lineTo(0,18);ctx.stroke();ctx.setLineDash([]);
+      ctx.strokeStyle='#f0cb82';ctx.fillStyle='#f0cb8222';ctx.beginPath();ctx.ellipse(0,18,35,8,0,0,Math.PI*2);ctx.fill();ctx.stroke();
+      ctx.translate(0,-height);ctx.strokeStyle='#32473f';ctx.fillStyle='#ddc497';ctx.lineWidth=1.4;
+      ctx.beginPath();ctx.moveTo(-30,-22);ctx.quadraticCurveTo(0,-63,30,-22);ctx.lineTo(15,-20);ctx.lineTo(0,-24);ctx.lineTo(-15,-20);ctx.closePath();ctx.fill();ctx.stroke();
+      for(const x of [-27,0,27]){ctx.beginPath();ctx.moveTo(x,-22);ctx.lineTo(x*.28,0);ctx.stroke();}
+      rounded(ctx,-15,-2,30,24,3,'#718777');ctx.strokeRect(-15,-2,30,24);
+      ctx.fillStyle='#e3c185';ctx.fillRect(-2,-2,4,24);ctx.fillRect(-15,8,30,4);
+      ctx.restore();
+    }
+  }
   private drawOnlineActor(actor: OnlineRenderActor, dt: number, reducedMotion: boolean): void {
     const p = actor.player;
     let animation = this.actorAnimations.get(p.id);
     if (!animation || animation.lifeId !== actor.lifeId) {
-      animation = { phase: 0, direction: 1, walk: 0, air: p.grounded ? 0 : 1, thrust: 0, recoil: 0, hit: 0, lifeId: actor.lifeId };
+      animation = { phase: 0, direction: 1, walk: 0, air: p.grounded ? 0 : 1, thrust: 0, recoil: 0,offhandRecoil:0, hit: 0, lifeId: actor.lifeId };
       this.actorAnimations.set(p.id, animation);
     }
     if (p.health <= 0) return;
@@ -628,6 +706,7 @@ export class GameRenderer {
     animation.air = mix(animation.air, p.grounded ? 0 : 1, 1 - Math.exp(-dt * 16));
     animation.thrust = mix(animation.thrust, p.thrusting ? 1 : 0, 1 - Math.exp(-dt * 18));
     animation.recoil = Math.max(0, animation.recoil - dt * 16);
+    animation.offhandRecoil=Math.max(0,animation.offhandRecoil-dt*16);
     animation.hit = Math.max(0, animation.hit - dt);
     // Preserve animation clocks offscreen; skip pose solving, vector paths and labels.
     if (p.x + p.width + 192 < this.camera.x || p.x - 192 > this.camera.x + 1280 / this.zoom
@@ -639,7 +718,11 @@ export class GameRenderer {
       walkPhase: animation.phase, moveSpeed: p.vx || animation.direction, verticalSpeed: p.vy,
       walkAmount: animation.walk, airborneAmount: animation.air, thrustAmount: animation.thrust,
       moving: Math.abs(p.vx) > 8, airborne: !p.grounded, thrusting: p.thrusting, recoil: animation.recoil,
-      reloadProgress: getReloadProgress(p.weapon.reloadTicks, CONFIG.reloadTicks), time: this.time, reducedMotion, hit: animation.hit > 0 };
+      weaponId:p.weapon.weaponId,offhandWeaponId:p.offhand?.weaponId,offhandRecoil:animation.offhandRecoil,
+      reloadProgress: getReloadProgress(p.weapon.reloadTicks, WEAPONS[p.weapon.weaponId].reloadTicks),
+      offhandReloadProgress:p.offhand?getReloadProgress(p.offhand.reloadTicks,WEAPONS[p.offhand.weaponId].reloadTicks):-1,
+      meleeProgress:p.meleeWindupTicks>0?1-p.meleeWindupTicks/MELEE_CONFIG.windupTicks:undefined,
+      time: this.time, reducedMotion, hit: animation.hit > 0 };
     const ctx = this.ctx;
     ctx.save(); ctx.globalAlpha = actor.connected ? 1 : 0.55;
     drawDetailedCharacter(ctx, p.x + p.width / 2, p.y + p.height, CHARACTER_SCALE, pose, actor.appearance, this.assets.images, this.characterParts);
@@ -1220,8 +1303,9 @@ export class GameRenderer {
   private event(event: PresentationEvent, reducedMotion: boolean, local = true) {
     const count = reducedMotion || this.graphics.effects === 'low' ? 2 : this.graphics.effects === 'medium' ? 4 : 8;
     if (event.type === 'shot') {
+      if(this.tracers.length>=128)this.tracers.shift();
       this.tracers.push({ ...event, life: 0.075 });
-      if (local) this.recoil = 1;
+      if (local) {if(event.hand==='offhand')this.offhandRecoil=1;else this.recoil = 1;}
       for (let i = 0; i < 3; i++)
         this.particle(
           event.toX,
@@ -1253,6 +1337,10 @@ export class GameRenderer {
           '#eac58b',
         );
     }
+    if(event.type==='melee'){
+      for(let i=0;i<count;i++)this.particle(event.x+Math.cos(event.aimAngle)*event.range,event.y+Math.sin(event.aimAngle)*event.range,
+        Math.cos(event.aimAngle)*80+(i-2)*15,Math.sin(event.aimAngle)*70-30,.12+i*.025,2,'#e9d9aa');
+    }
     if (event.type === 'targetDeath') {
       this.labels.push({
         x: event.x,
@@ -1261,7 +1349,7 @@ export class GameRenderer {
         life: 1.1,
         color: '#f5e6bd',
       });
-      for (let i = 0; i < count * 2; i++)
+      for (let i = 0; i < Math.min(3,count); i++)
         this.particle(
           event.x,
           event.y,
@@ -1294,6 +1382,7 @@ export class GameRenderer {
           3,
           '#d9d3a2',
         );
+    if(this.labels.length>48)this.labels.splice(0,this.labels.length-48);
   }
   private effects() {
     const ctx = this.ctx;

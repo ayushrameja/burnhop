@@ -6,7 +6,7 @@ import { drawDetailedCharacter } from '../game/detailedCharacter';
 import { Renderer, type OnlineRenderActor } from '../game/renderer';
 import { CONFIG, createWorld } from '../game/simulation';
 
-vi.mock('../game/detailedCharacter', () => ({ drawDetailedCharacter: vi.fn() }));
+vi.mock('../game/detailedCharacter', async original => ({ ...await original<typeof import('../game/detailedCharacter')>(), drawDetailedCharacter: vi.fn() }));
 function setup() {
   vi.stubGlobal('window', { devicePixelRatio: 1 });
   const noop = () => {};
@@ -40,7 +40,8 @@ describe('online actor presentation', () => {
   it('gives remote shots their own recoil and gives only the damaged pilot a hit flash', () => {
     const { renderer, actors } = setup();
     renderer.renderOnline(actors, 'me', 2, [
-      { actorId: 'other', type: 'shot', x: 0, y: 0, toX: 100, toY: 100, hit: true },
+      { actorId: 'other', type: 'shot', x: 0, y: 0, toX: 100, toY: 100, hit: true,weaponId:'pistol',hand:'main',instanceId:'test-pistol',shotCounter:1,
+        originX:0,originY:0,directionX:Math.SQRT1_2,directionY:Math.SQRT1_2,range:1000,distance:Math.hypot(100,100) },
       { actorId: 'other', targetId: 'me', type: 'hit', x: 100, y: 100, damage: 20 },
     ], 1 / 60);
     const poses = vi.mocked(drawDetailedCharacter).mock.calls;

@@ -1,3 +1,4 @@
+import { createWeapon } from '../game/weapons';
 import { describe, expect, it } from 'vitest';
 import arenaData from '../../public/assets/arena.json';
 import { cloneActor, compileArena, CONFIG, createWorld, restoreActor, stepSimulation } from '../game/simulation';
@@ -16,7 +17,7 @@ function replayAfterCorrection(snapshot: PlayerState, pending: NetworkInput[], m
   Object.assign(predicted, { x: 0, y: 0, width: 1, height: 1, vx: -99, vy: 99,
     grounded: !snapshot.grounded, coyoteTicks: 99, jumpBufferTicks: 99, aimAngle: 3,
     crouchAmount: 0.3, health: 0, fuel: 50, thrusting: !snapshot.thrusting,
-    thrustLatched: !snapshot.thrustLatched, fuelDelayTicks: 99, weapon: { ammo: 0, reloadTicks: 99, cooldownTicks: 99 } });
+    thrustLatched: !snapshot.thrustLatched, fuelDelayTicks: 99, weapon: { ...createWeapon('pistol'), ammo: 0, reloadTicks: 99, cooldownTicks: 99 } });
   restoreActor(predicted, snapshot);
   const replayEvents = pending.flatMap(frame => stepPredictedActor(predicted, frame, geometry));
   expect(predicted).toEqual(expected);
@@ -76,9 +77,9 @@ describe('shared prediction and reconciliation', () => {
   });
   it('replays reload completion and cooldown without double-spending ammunition', () => {
     const player = createWorld(arena).player;
-    player.weapon = { ammo: 7, reloadTicks: 12, cooldownTicks: 4 };
+    player.weapon = { ...createWeapon('pistol'), ammo: 7, reloadTicks: 12, cooldownTicks: 4 };
     const { predicted, events } = replayAfterCorrection(player,
-      Array.from({ length: 18 }, (_, inputId) => input({ inputId, fireHeld: true })));
+      Array.from({ length: 24 }, (_, inputId) => input({ inputId, fireHeld: true })));
     expect(events.filter(event => event.type === 'reloadEnd')).toHaveLength(1);
     expect(events.filter(event => event.type === 'shot')).toHaveLength(2);
     expect(predicted.weapon.ammo).toBe(CONFIG.magazineSize - 2);
@@ -90,6 +91,6 @@ describe('shared prediction and reconciliation', () => {
     expect(player).toEqual(snapshot);
     player.health = 100;
     const events = stepPredictedActor(player, input({ fireHeld: true, inputId: 4 }), compileArena(arena));
-    expect(events).toHaveLength(1); expect(events[0]).toMatchObject({ type: 'shot', hit: false, shotId: 'player:0:4' });
+    expect(events).toHaveLength(1); expect(events[0]).toMatchObject({ type: 'shot', hit: false, shotId: `player:0:${player.weapon.instanceId}:main:1` });
   });
 });

@@ -119,7 +119,13 @@ describe('polygon terrain collision', () => {
     const origin = getWeaponOrigin(world.player);
     const wall = polygon([[150, origin.y + 20], [200, origin.y - 30], [200, 400], [150, 400]]);
     const events = tick(world, { ...map, terrain: [hill, wall] }, { fireHeld: true });
-    expect(events.find(event => event.type === 'shot')).toMatchObject({ hit: false, toX: 170 });
+    const shot = events.find(event => event.type === 'shot')!;
+    const direction = { x: shot.directionX, y: shot.directionY };
+    const distance = raySolidDistance({ x: shot.originX, y: shot.originY }, direction, wall, shot.range)!;
+    expect(distance).toBeGreaterThan(0);
+    expect(shot.hit).toBe(false);
+    expect(shot.toX).toBeCloseTo(shot.originX + direction.x * distance);
+    expect(shot.toY).toBeCloseTo(shot.originY + direction.y * distance);
     expect(world.target.health).toBe(100);
     expect(world.hits).toBe(0);
   });

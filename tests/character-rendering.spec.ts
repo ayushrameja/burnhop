@@ -1,5 +1,6 @@
 import { installCapture, openMenu, enterFullscreen, moveAim } from './helpers/capture';
 import { test, expect, type Page } from '@playwright/test';
+import { choosePracticeLoadout, cycleViewTo } from './helpers/combat';
 import { mkdir, writeFile } from 'node:fs/promises';
 
 test.beforeEach(async ({ page }) => { await installCapture(page); });
@@ -156,12 +157,12 @@ test('hit feedback is reviewable at both scales, by keyboard and with reduced mo
   expect(errors).toEqual([]);
 });
 
-test('a real practice shot starts and clears the target flash while retaining 20 damage', async ({ page }) => {
+test('a real M416 body hit deals 23 damage and starts and clears the target flash', async ({ page }) => {
   await openMenu(page);
   await page.getByRole('button', { name: 'Enter practice', exact: true }).click();
   await page.waitForFunction(() => window.__BURNHOP__?.metrics().running);
-  // The original 3x framing keeps the target onscreen for clicking and flash capture.
-  await page.keyboard.press('Tab');
+  await choosePracticeLoadout(page, 'm416');
+  await cycleViewTo(page, 2.5);
   const position = await page.evaluate(() => {
     const api = window.__BURNHOP__!, target = api.snapshot().target;
     return api.toScreen(target.x + target.width / 2, target.y + target.height / 2);
@@ -193,7 +194,7 @@ test('a real practice shot starts and clears the target flash while retaining 20
   await page.waitForFunction(() => window.__BURNHOP__!.snapshot().hits === 1);
   await page.mouse.up();
   const result = await observed;
-  expect(result.health).toBe(80); expect(result.hits).toBe(1);
+  expect(result.health).toBe(77); expect(result.hits).toBe(1);
   expect(result.maxFlash).toBeGreaterThan(0); expect(result.maxFlash).toBeLessThanOrEqual(8);
   expect(result.cleared).toBe(true); expect(result.hitImage).not.toBe(result.normalImage);
   for (const [name, data] of [['hit', result.hitImage], ['normal', result.normalImage]]) {

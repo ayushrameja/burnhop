@@ -3,13 +3,18 @@ import {
   type CharacterAimGeometry, type CharacterGeometry, type CharacterLegGeometry, type CharacterPose,
 } from './character';
 import { clothingMaterial, HAIR_COLORS, SKIN_COLORS, type DetailedAppearance } from './appearance';
-import type { Vec2 } from './types';
+import type { Vec2, WeaponId } from './types';
 import { drawCharacterHitFlash } from './characterHitFlash';
 import { RELOAD_CUES } from './reload';
 import type { CharacterParts } from './characterParts';
+import { drawWeaponArtwork, drawWeaponMagazine, WEAPON_ARTWORK } from './weaponArtwork';
 
 export interface DetailedArmGeometry { shoulder: Vec2; elbow: Vec2; hand: Vec2; upperLength: number; forearmLength: number }
 export interface DetailedMagazineGeometry { center: Vec2; angle: number; opacity: number; seated: boolean; fresh: boolean }
+export interface HeldWeaponGeometry {
+  weaponId: WeaponId; pivot: Vec2; angle: number; recoil: number; boltOffset: number;
+  triggerGrip: Vec2; supportGrip: Vec2; muzzle: Vec2; magazine: DetailedMagazineGeometry;
+}
 export interface DetailedCharacterRig {
   geometry: CharacterGeometry;
   aim: CharacterAimGeometry;
@@ -19,6 +24,8 @@ export interface DetailedCharacterRig {
   magazine: DetailedMagazineGeometry;
   reload: { progress: number; stage: 'reach' | 'remove' | 'stow' | 'insert' | 'seat' | 'rack' | 'settle' } | null;
   rifle: { pivot: Vec2; angle: number; recoil: number; boltOffset: number; triggerGrip: Vec2; supportGrip: Vec2; muzzle: Vec2 };
+  weaponId?: WeaponId;
+  offhand?: HeldWeaponGeometry;
 }
 
 /** Rifle-local anchors, shared by both the drawing and the arm solver. */
@@ -54,6 +61,7 @@ export function calculateDetailedCharacterRig(pose: CharacterPose): DetailedChar
   const detailedPose = { ...pose, crouchAmount: pose.crouchAmount ?? 0 };
   const geometry = calculateCharacterPose(detailedPose);
   const aim = calculateCharacterAim(detailedPose, geometry);
+  if (pose.weaponId) return calculateWeaponCharacterRig(pose, geometry, aim);
   const progress = Number.isFinite(pose.reloadProgress) && pose.reloadProgress! >= 0 ? clamp01(pose.reloadProgress!) : -1;
   const reloading = progress >= 0;
   // Keep the authoritative aim pivot/head/torso intact. Only the held rifle tips
@@ -119,6 +127,51 @@ export function calculateDetailedCharacterRig(pose: CharacterPose): DetailedChar
     supportHandAngle, magazine, reload,
     rifle: { pivot: aim.weaponPivot, angle, recoil, boltOffset, triggerGrip, supportGrip, muzzle: grip(DETAILED_RIFLE_ANCHORS.muzzle) },
   };
+}
+
+function calculateWeaponCharacterRig(pose: CharacterPose, geometry: CharacterGeometry, aim: CharacterAimGeometry): DetailedCharacterRig {
+  const shoulder = (x:number) => rotated({x:geometry.bodyOffset.x+x,y:geometry.bodyOffset.y-45-geometry.bodyBob},aim.torsoPivot,aim.torsoAngle);
+  const mainReloading=(pose.reloadProgress??-1)>=0,offhandReloading=!mainReloading&&(pose.offhandReloadProgress??-1)>=0;
+  const held = (weaponId:WeaponId,offhand:boolean):HeldWeaponGeometry => {
+    const art=WEAPON_ARTWORK[weaponId], value=offhand?pose.offhandReloadProgress:pose.reloadProgress;
+    const progress=value!==undefined && value>=0?clamp01(value):-1;
+    const tilt=progress>=0?segment(progress,0,.12)*(1-segment(progress,.88,1)):0;
+    // While one gun reloads, the other is visibly stowed at the belt so a hand can work the magazine.
+    const stowed=pose.offhandWeaponId&&(offhand?mainReloading:offhandReloading);
+    const otherProgress=(offhand?pose.reloadProgress:pose.offhandReloadProgress)??-1;
+    const stowAmount=stowed?segment(otherProgress,0,.12)*(1-segment(otherProgress,.88,1)):0;
+    const pivot=lerpPoint({x:aim.weaponPivot.x-(offhand?3*tilt:0),y:aim.weaponPivot.y+(offhand?7-10*tilt:0)},
+      {x:geometry.bodyOffset.x+(offhand?9:-11),y:geometry.bodyOffset.y-23},stowAmount);
+    const angle=mix(aim.pitch*(1-tilt*.55)-tilt*(pose.reducedMotion ? .035 : .08),1.2,stowAmount);
+    const recoil=progress>=0||stowed?0:clamp01((offhand?pose.offhandRecoil:pose.recoil)??0);
+    const point=(p:Vec2)=>rotated({x:pivot.x+p.x-recoil*2.2,y:pivot.y+p.y},pivot,angle);
+    const extracted=progress>=0?segment(progress,.12,.3)*(1-segment(progress,.45,.6)):0;
+    const magazinePoint=point({x:art.magazine.x,y:art.magazine.y+extracted*(weaponId==='revolver'?3:6)});
+    return {weaponId,pivot,angle,recoil,boltOffset:0,triggerGrip:point(art.trigger),supportGrip:point(art.support),muzzle:point(art.muzzle),
+      magazine:{center:magazinePoint,angle:angle+(weaponId==='revolver'?extracted*.5:0),opacity:progress>.3&&progress<.43?.12:1,seated:extracted===0,fresh:progress>=.4}};
+  };
+  const main=held(pose.weaponId!,false),offhand=pose.offhandWeaponId?held(pose.offhandWeaponId,true):undefined;
+  const progress=pose.reloadProgress??-1;
+  let supportHand=offhand?offhand.triggerGrip:main.supportGrip;
+  if(progress>=0){
+    const reach=segment(progress,0,.12)*(1-segment(progress,.82,1));
+    const magazineHand={x:main.magazine.center.x,y:main.magazine.center.y+3};
+    supportHand=lerpPoint(offhand?offhand.triggerGrip:main.supportGrip,magazineHand,reach);
+  }
+  const punch=pose.meleeProgress!==undefined&&pose.meleeProgress>=0?Math.sin(clamp01(pose.meleeProgress)*Math.PI):0;
+  let mainHand=pose.meleeProgress!==undefined && pose.meleeProgress>=0
+    ? rotated({x:aim.weaponPivot.x+8+punch*19,y:aim.weaponPivot.y},aim.weaponPivot,aim.pitch)
+    :main.triggerGrip;
+  if(offhand && offhandReloading){
+    const reach=segment(pose.offhandReloadProgress!,0,.12)*(1-segment(pose.offhandReloadProgress!,.82,1));
+    mainHand=lerpPoint(main.triggerGrip,{x:offhand.magazine.center.x,y:offhand.magazine.center.y+3},reach);
+  }
+  const mainShoulder=shoulder(-8);
+  if(punch>0){mainShoulder.x+=Math.cos(aim.pitch)*punch*14;mainShoulder.y+=Math.sin(aim.pitch)*punch*14;}
+  return {geometry,aim,weaponId:pose.weaponId,offhand,triggerArm:solveArm(mainShoulder,mainHand,11.5),supportArm:solveArm(shoulder(7),supportHand,14),
+    supportHandAngle:offhand?.angle??main.angle,magazine:main.magazine,
+    reload:progress>=0?{progress,stage:progress<.15?'reach':progress<.35?'remove':progress<.5?'stow':progress<.65?'insert':progress<.85?'rack':'settle'}:null,
+    rifle:main};
 }
 
 function path(ctx: CanvasRenderingContext2D, points: readonly number[], fill: string, stroke = OUTLINE, width = 1.35) {
@@ -217,6 +270,11 @@ function drawTorso(ctx: CanvasRenderingContext2D, rig: DetailedCharacterRig, a: 
   const p = clothingMaterial(a.topColor, 'top'), skin = SKIN_COLORS[a.skin];
   const w = a.build==='slim'?10:a.build==='broad'?14:12;
   ctx.save();rotateAround(ctx,rig.aim.torsoPivot,rig.aim.torsoAngle);ctx.translate(rig.geometry.bodyOffset.x,rig.geometry.bodyOffset.y-rig.geometry.bodyBob);
+  // The shared boot-fuel unit stays behind the jacket and travels with torso debris.
+  box(ctx,-w-6,-46,8,20,2.2,'#354444',OUTLINE,1.1);
+  box(ctx,-w-5.5,-42.5,2.3,9,1,'#6aadb0','',0);
+  line(ctx,[-w-4.6,-44.2,-w-1,-44.2],'#82978d',.8);
+  line(ctx,[-w-4.5,-29,-w-1,-29],'#1f3030',1.4);
   // The neck, collar and jacket share the torso transform; the head has its own pivot.
   box(ctx,-3.4,-53,9,9,2,skin.base);
   path(ctx,[-w+3,-49,-4,-50,6,-49,w-1,-46,w,-28,w-1,-23,-w+1,-23,-w,-43],p.base);
@@ -544,12 +602,20 @@ export function drawDetailedCharacter(
     return;
   }
   const rig=calculateDetailedCharacterRig(pose);
+  if(pose.danceBeat!==undefined){
+    const beat=pose.reducedMotion?0:pose.danceBeat*Math.PI*2;
+    const body=rig.geometry.bodyOffset;
+    const shoulder=(x:number)=>({x:body.x+x,y:body.y-45});
+    rig.triggerArm=solveArm(shoulder(-8),{x:body.x-16+Math.sin(beat)*4,y:body.y-64-Math.cos(beat)*5},11.5);
+    rig.supportArm=solveArm(shoulder(7),{x:body.x+23+Math.sin(beat)*4,y:body.y-61+Math.cos(beat)*5},14);
+  }
   const facing=Math.cos(pose.aimAngle)>=0?1:-1;
   const waistY=rig.geometry.bodyOffset.y-rig.geometry.bodyBob-25;
   ctx.save();ctx.translate(x,y);ctx.scale(scale*facing,scale);ctx.lineCap='round';ctx.lineJoin='round';
   drawExhaust(ctx,rig,pose);
   drawLeg(ctx,rig.geometry.farLeg,appearance,false,waistY);
   drawArm(ctx,rig.supportArm,appearance,true);
+  if(rig.offhand && pose.meleeProgress===undefined)drawHeldWeapon(ctx,rig.offhand,pose.reducedMotion??false);
   drawTorso(ctx,rig,appearance);
   drawLeg(ctx,rig.geometry.nearLeg,appearance,true,waistY);
   drawBelt(ctx,rig,appearance);
@@ -560,9 +626,61 @@ export function drawDetailedCharacter(
   tube(ctx,rig.supportArm.elbow,rig.supportArm.hand,supportWidth-1,skin.dark);
   if(appearance.top!=='t-shirt')tube(ctx,rig.supportArm.elbow,lerpPoint(rig.supportArm.elbow,rig.supportArm.hand,.64),supportWidth,sleeve.dark);
   drawArm(ctx,rig.triggerArm,appearance,false);
-  drawRifle(ctx,rig,appearance);
-  drawMagazine(ctx,rig.magazine);
+  if(pose.danceBeat===undefined && !(pose.meleeProgress!==undefined && pose.meleeProgress>=0)){
+    if(rig.weaponId)drawHeldWeapon(ctx,{...rig.rifle,weaponId:rig.weaponId,magazine:rig.magazine},pose.reducedMotion??false);
+    else {drawRifle(ctx,rig,appearance);drawMagazine(ctx,rig.magazine);}
+  }
   ctx.save();ctx.translate(rig.supportArm.hand.x,rig.supportArm.hand.y);ctx.rotate(rig.supportHandAngle);
   drawHand(ctx,appearance,false);ctx.restore();
+  ctx.restore();
+}
+
+function drawHeldWeapon(ctx:CanvasRenderingContext2D,weapon:HeldWeaponGeometry,reducedMotion:boolean):void{
+  ctx.save();ctx.translate(weapon.pivot.x,weapon.pivot.y);ctx.rotate(weapon.angle);ctx.translate(-weapon.recoil*2.2,0);
+  drawWeaponArtwork(ctx,weapon.weaponId,{magazine:false,recoil:weapon.recoil,flash:!reducedMotion});ctx.restore();
+  ctx.save();ctx.translate(weapon.magazine.center.x,weapon.magazine.center.y);ctx.rotate(weapon.magazine.angle);
+  drawWeaponMagazine(ctx,weapon.weaponId,weapon.magazine.opacity);ctx.restore();
+}
+
+/** The same equipped pilot artwork dances unarmed; beat is expressed in musical cycles. */
+export function drawDancingCharacter(ctx:CanvasRenderingContext2D,x:number,y:number,scale:number,appearance:DetailedAppearance,beat:number,reducedMotion:boolean):void{
+  const cycle=reducedMotion?0:beat*Math.PI*2;
+  drawDetailedCharacter(ctx,x,y+(reducedMotion?0:Math.sin(cycle)*1.8)*scale,scale,
+    {aimAngle:.05,danceBeat:beat,reducedMotion,crouchAmount:.1+(1-Math.cos(cycle))*.12,
+      locomotion:true,walkPhase:cycle/2,walkAmount:reducedMotion?0:.65,moveSpeed:90,airborneAmount:0,thrustAmount:0},appearance);
+}
+
+export type CharacterFragmentKind='head'|'torso'|'farArm'|'nearArm'|'farLeg'|'nearLeg'|'upperBody'|'legs';
+export function getCharacterFragmentAnchors(pose:CharacterPose):Record<CharacterFragmentKind,Vec2>{
+  const rig=calculateDetailedCharacterRig(pose);
+  const middle=(a:Vec2,b:Vec2)=>lerpPoint(a,b,.5);
+  const torso={x:rig.aim.torsoPivot.x,y:rig.aim.torsoPivot.y-9};
+  const farLeg=middle(rig.geometry.farLeg.hip,rig.geometry.farLeg.ankle),nearLeg=middle(rig.geometry.nearLeg.hip,rig.geometry.nearLeg.ankle);
+  return {head:{x:rig.aim.headPivot.x,y:rig.aim.headPivot.y-13},torso,upperBody:torso,legs:middle(farLeg,nearLeg),
+    farArm:middle(rig.supportArm.shoulder,rig.supportArm.hand),nearArm:middle(rig.triggerArm.shoulder,rig.triggerArm.hand),
+    farLeg,nearLeg};
+}
+
+/** Grouped low-detail pieces retain every dressed limb instead of omitting small parts. */
+export function drawCharacterFragment(ctx:CanvasRenderingContext2D,kind:CharacterFragmentKind,pose:CharacterPose,appearance:DetailedAppearance,parts?:CharacterParts):void{
+  const rig=calculateDetailedCharacterRig(pose),anchor=getCharacterFragmentAnchors(pose);
+  const center=anchor[kind],waistY=rig.geometry.bodyOffset.y-rig.geometry.bodyBob-25;
+  ctx.save();ctx.translate(-center.x,-center.y);ctx.lineCap='round';ctx.lineJoin='round';
+  if(kind==='head')drawHead(ctx,rig,appearance,parts);
+  else if(kind==='torso'){drawTorso(ctx,rig,appearance);drawBelt(ctx,rig,appearance);}
+  else if(kind==='upperBody'){
+    drawArm(ctx,rig.supportArm,appearance,true);
+    drawTorso(ctx,rig,appearance);drawBelt(ctx,rig,appearance);
+    drawArm(ctx,rig.triggerArm,appearance,false);
+    ctx.save();ctx.translate(rig.supportArm.hand.x,rig.supportArm.hand.y);ctx.rotate(rig.supportHandAngle);
+    drawHand(ctx,appearance,false);ctx.restore();
+  }
+  else if(kind==='legs'){
+    drawLeg(ctx,rig.geometry.farLeg,appearance,false,waistY);
+    drawLeg(ctx,rig.geometry.nearLeg,appearance,true,waistY);
+  }
+  else if(kind==='farArm')drawArm(ctx,rig.supportArm,appearance,true);
+  else if(kind==='nearArm')drawArm(ctx,rig.triggerArm,appearance,false);
+  else drawLeg(ctx,kind==='farLeg'?rig.geometry.farLeg:rig.geometry.nearLeg,appearance,kind==='nearLeg',waistY);
   ctx.restore();
 }

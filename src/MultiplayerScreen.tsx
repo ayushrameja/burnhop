@@ -1,6 +1,8 @@
 import { retainHud } from './game/hud';
 import { useCallback, useEffect, useRef, useState, type RefObject, type Dispatch, type SetStateAction } from 'react';
 import CombatHud from './CombatHud';
+import CombatFeedback from './CombatFeedback';
+import type { ZoomLevel } from './game/camera';
 import SettingsScreen from './SettingsScreen';
 import KeyboardCaptureNotice from './KeyboardCaptureNotice';
 import { drawDetailedCharacter } from './game/detailedCharacter';
@@ -62,6 +64,7 @@ export default function MultiplayerScreen({ canvasRef, captureRef, pauseRef, act
   const [showSettings, setShowSettings] = useState(false);
   const [copied, setCopied] = useState(false);
   const [hud, setHud] = useState(EMPTY_HUD);
+  const [viewRange, setViewRange] = useState<ZoomLevel>(1);
   const [fps, setFps] = useState<number | null>(null);
   const [runtimeReady, setRuntimeReady] = useState(false);
   const runtimeRef = useRef<OnlineRuntime | null>(null);
@@ -117,12 +120,13 @@ export default function MultiplayerScreen({ canvasRef, captureRef, pauseRef, act
   }, [active, onActiveChange]);
   useEffect(() => {
     if (!assets || !snapshot.sessionId || !canvasRef.current) return;
-    const runtime = new OnlineRuntime(canvasRef.current, assets, connection, { onHud: next => setHud(previous => retainHud(previous, next)), onPause: pause, onPerformance: setFps });
+    const runtime = new OnlineRuntime(canvasRef.current, assets, connection, { onHud: next => setHud(previous => retainHud(previous, next)), onPause: pause, onPerformance: setFps, onZoom: setViewRange });
     runtimeRef.current = runtime;
     const current = settingsRef.current;
     runtime.setAppearance(current.appearance);
     runtime.setMuted(current.muted);
     runtime.setAudioVolumes(current.audio);
+    runtime.setFeedback(current.feedback);
     runtime.setReducedMotion(current.reducedMotion);
     runtime.setGraphics(current.graphics);
     runtime.setControls(current.controls);
@@ -135,6 +139,7 @@ export default function MultiplayerScreen({ canvasRef, captureRef, pauseRef, act
     runtime?.setAppearance(settings.appearance);
     runtime?.setMuted(settings.muted);
     runtime?.setAudioVolumes(settings.audio);
+    runtime?.setFeedback(settings.feedback);
     runtime?.setReducedMotion(settings.reducedMotion);
     runtime?.setGraphics(settings.graphics);
     runtime?.setControls(settings.controls);
@@ -203,14 +208,18 @@ export default function MultiplayerScreen({ canvasRef, captureRef, pauseRef, act
   const unavailable = !import.meta.env.VITE_COLYSEUS_URL;
 
   if (isPlaying) return <main className="game-screen online-game" data-testid="online-match">
+    <CombatFeedback health={hud.health} damagePulse={hud.damageSequence ?? 0} killPulse={hud.killSequence ?? 0}
+      reducedMotion={settings.reducedMotion} intensity={settings.feedback.intensity}
+      active={!paused && active && snapshot.status === 'connected'} />
     <div className="hud-layer" inert={paused || !active} aria-hidden={paused || !active}>
       <button className="pause-trigger" aria-label="Open match menu" onClick={pause}><span aria-hidden="true">Ⅱ</span><kbd>ESC</kbd></button>
       <span className="arena-readout">Outpost · Free-for-all</span>
       <div className="online-clock" aria-label="Time remaining">{clock(snapshot.remainingTicks)}</div>
       <CombatHud hud={hud} />
+      <span className="zoom-readout" title="Higher values show more arena">View range {viewRange}×</span>
       <div className="online-score-mini" aria-label="Match score"><b>{me?.kills ?? 0}</b> KILLS <span>/</span> <b>{me?.deaths ?? 0}</b> DEATHS</div>
       {me && me.health === 0 && <div className="online-respawn" role="status">{me.connected ? `Respawning in ${Math.max(1, Math.ceil(me.respawnTicks / 60))}…` : 'Waiting to reconnect…'}</div>}
-      {me && me.health > 0 && me.protectionTicks > 0 && <div className="online-protection">SPAWN PROTECTION · FIRING ENDS IT</div>}
+      {me && me.health > 0 && me.protectionTicks > 0 && <div className="online-protection">SPAWN PROTECTION · ATTACKING ENDS IT</div>}
       <span className="fps-readout">{fps === null ? '—' : Math.round(fps)} FPS</span>
     </div>
     {paused && <div className="pause-backdrop">
