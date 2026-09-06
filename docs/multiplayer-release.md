@@ -113,3 +113,14 @@ node dist-tools/loadtest.mjs --endpoint https://de-fra-24270fd2.colyseus.cloud -
 The final capacity and publication record belongs in local `load-results/combat-release.md`; only a completed run with every gate passing counts. Earlier runs deliberately interrupted for cover/stance corrections remain separate. Before release, retain the prior matched commit **`c47c4c5e89421ce8f130f1f57bdae554db24808f`** and its Vercel deployment **`9KqnDfUJjdL6ZspBqcBcRsoQzGDS`** for rollback. Deploy between matches, check the compatibility ID, and restore both providers together if needed.
 
 Human balance, sound recognition, spawn-to-pickup fairness, the affected Windows machine and the real Canada–India connection remain separate validation work. No new analytics service, server tier or region is introduced.
+
+
+## September 6 weapon audio and practice release
+
+Runtime candidate: `f068cf14e7896fc3688c218bf0f9b986f5c28906`. Compatibility is **`burnhop-3:gameplay-3:7b06d4e7:e38d8d40`**. This release adds recorded weapon shots/reloads, the heavier sniper report, both maps' fully stocked practice stations, separated dual grips and alternating tap fire. It also includes the current menu music/dances and control defaults. The next-hand flag is synchronized through the shared wire state.
+
+Validation passed: 472 unit/shared/backend tests, both multiplayer browser suites, client/server/load-harness builds, and 129 general Chromium scenarios. The existing native OS capture test remains opt-in and skipped. Two stale browser expectations were corrected to the current pointer-aim default; the same scenarios then passed. The first online attempt reused an older local server without a backend URL; both suites passed on a dedicated port with matching client/server configuration. Neither correction changes runtime behavior.
+
+The actual Frankfurt capacity gate passed with 900.241 active seconds, 8 clients, 4 match starts and 18,055 confirmed shots. All gates passed, with no errors or client drops. Maximum rolling simulation p99 was 7.525 ms, peak RSS 118.19 MiB, final memory slope -0.273 MiB/min, and sustained schedule backlog and discarded simulation time both zero. The largest isolated simulation tick was 35.541 ms and the final match recorded 711 server resynchronizations; capacity success is not a human smoothness claim. Full local evidence: `load-results/weapon-audio-frankfurt-15min.json`.
+
+The matching rollback pair is commit `f9102305558affe12c5b326d6eb45ab4eb687a41` and Vercel deployment `EsjRc3ok1LdJAHG9VdWhgKmBptUW`. Both providers must be restored together if rollback is necessary. Final publication and live smoke evidence is recorded locally in `load-results/weapon-audio-release.md`. No hosting plan or region changes are included.
