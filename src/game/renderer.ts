@@ -78,6 +78,8 @@ export interface CombatPresentation {
 }
 export type PresentationEvent = GameEvent & { id?:string;actorId?: string; targetId?: string;killerId?:string;lifeId?:number };
 type ActorAnimation = { phase: number; direction: number; walk: number; air: number; thrust: number; recoil: number;offhandRecoil:number; hit: number; lifeId: number };
+type RenderedActorPose = { lifeId: number; pose: Readonly<CharacterPose> };
+const MAX_RENDERED_POSES = 16;
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 const seed = (n: number) => {
@@ -177,6 +179,7 @@ export class GameRenderer {
   private culledActors = 0;
   private presentActors = new Set<string>();
   private actorAnimations = new Map<string, ActorAnimation>();
+  private actorPoses = new Map<string, RenderedActorPose>();
   constructor(
     private canvas: HTMLCanvasElement,
     private assets: GameAssets,
@@ -308,6 +311,7 @@ export class GameRenderer {
     this.labels = [];
     this.reticle = null;
     this.actorAnimations.clear();
+    this.actorPoses.clear();
     this.fragments.clear();this.deathEvents.clear();
   }
   resetOnlinePresentation(preserveDebris=false): void {
@@ -315,12 +319,19 @@ export class GameRenderer {
     this.walkAmount = 0; this.airborneAmount = 0; this.thrustAmount = 0;
     this.particles = []; this.tracers = []; this.labels = []; this.reticle = null; this.exhaustTime = 0;
     this.offhandRecoil=0;
-    if(!preserveDebris){this.fragments.clear();this.deathEvents.clear();}
+    if(!preserveDebris){
+      this.fragments.clear();this.deathEvents.clear();
+      this.actorAnimations.clear();this.actorPoses.clear();
+    }
   }
   renderOnline(actors: OnlineRenderActor[], localId: string, tick: number, events: PresentationEvent[], dt: number,
     reducedMotion = false, aimMode: AimMode = 'radial', liveAim?: LiveAimInput,combat?:CombatPresentation): void {
     const local = actors.find(actor => actor.player.id === localId) ?? actors[0];
-    if (!local) return;
+    if (!local) {
+      this.actorAnimations.clear();
+      this.actorPoses.clear();
+      return;
+    }
     const world: WorldState = { tick, player: local.player, target: { id: '', x: 0, y: 0, width: 0, height: 0, health: 0, respawnTicks: 0, hitTicks: 0 },
       shotsFired: 0, hits: 0, kills: 0 };
     this.render(world, world, 1, local.appearance, events, dt, false, reducedMotion, aimMode, liveAim, actors,combat);
@@ -431,9 +442,12 @@ export class GameRenderer {
           this.deathEvents.add(deathKey);if(this.deathEvents.size>128)this.deathEvents.delete(this.deathEvents.values().next().value!);
           const victim=onlineActors?.find(actor=>actor.player.id===event.actorId);
           const body=victim?.player??(!onlineActors?current.target:player);
+          const cached = event.actorId ? this.actorPoses.get(event.actorId) : undefined;
+          const renderedPose = cached && event.lifeId !== undefined && cached.lifeId === event.lifeId ? cached.pose : undefined;
           this.fragments.spawn(event.deathPose??{...body,aimAngle:victim?.player.aimAngle??Math.PI,crouchAmount:victim?.player.crouchAmount??0,
             vx:victim?.player.vx??0,vy:victim?.player.vy??0,appearance:victim?.appearance??BOT_APPEARANCE},
-            event.impactDirection??{x:Math.cos(player.aimAngle),y:Math.sin(player.aimAngle)},event.cosmeticSeed??current.tick,this.graphics.effects,reducedMotion);
+            event.impactDirection??{x:Math.cos(player.aimAngle),y:Math.sin(player.aimAngle)},event.cosmeticSeed??current.tick,
+            this.graphics.effects,reducedMotion,renderedPose);
         }
       }
     }
@@ -563,18 +577,15 @@ export class GameRenderer {
       this.presentActors.clear();
       for (const actor of onlineActors) this.presentActors.add(actor.player.id);
       for (const id of this.actorAnimations.keys()) if (!this.presentActors.has(id)) this.actorAnimations.delete(id);
+      for (const id of this.actorPoses.keys()) if (!this.presentActors.has(id)) this.actorPoses.delete(id);
       for (const actor of onlineActors) if (actor.player.id !== player.id) this.drawOnlineActor(actor, dt, reducedMotion);
     }
-    if (!onlineActors || player.health > 0) drawDetailedCharacter(
-      ctx,
-      px + player.width / 2,
-      feetY,
-      CHARACTER_SCALE,
-      pose,
-      appearance,
-      this.assets.images,
-      this.characterParts,
-    );
+    if (!onlineActors || player.health > 0) {
+      drawDetailedCharacter(ctx, px + player.width / 2, feetY, CHARACTER_SCALE, pose,
+        appearance, this.assets.images, this.characterParts);
+      const local = onlineActors?.find(actor => actor.player.id === player.id);
+      if (local) this.rememberActorPose(player.id, local.lifeId, pose);
+    }
     if (onlineActors && player.health > 0) {
       const local = onlineActors.find(actor => actor.player.id === player.id);
       if (local) this.actorLabel(local, px + player.width / 2, py - 12, true);
@@ -695,6 +706,7 @@ export class GameRenderer {
     const p = actor.player;
     let animation = this.actorAnimations.get(p.id);
     if (!animation || animation.lifeId !== actor.lifeId) {
+      if (animation?.lifeId !== actor.lifeId) this.actorPoses.delete(p.id);
       animation = { phase: 0, direction: 1, walk: 0, air: p.grounded ? 0 : 1, thrust: 0, recoil: 0,offhandRecoil:0, hit: 0, lifeId: actor.lifeId };
       this.actorAnimations.set(p.id, animation);
     }
@@ -726,8 +738,15 @@ export class GameRenderer {
     const ctx = this.ctx;
     ctx.save(); ctx.globalAlpha = actor.connected ? 1 : 0.55;
     drawDetailedCharacter(ctx, p.x + p.width / 2, p.y + p.height, CHARACTER_SCALE, pose, actor.appearance, this.assets.images, this.characterParts);
+    this.rememberActorPose(p.id, actor.lifeId, pose);
     this.actorLabel(actor, p.x + p.width / 2, p.y - 12, false);
     ctx.restore();
+  }
+  private rememberActorPose(actorId: string, lifeId: number, pose: CharacterPose): void {
+    this.actorPoses.set(actorId, { lifeId, pose: Object.freeze({ ...pose }) });
+    if (this.actorPoses.size > MAX_RENDERED_POSES) {
+      this.actorPoses.delete(this.actorPoses.keys().next().value!);
+    }
   }
   private actorLabel(actor: OnlineRenderActor, x: number, y: number, local: boolean): void {
     const ctx = this.ctx;

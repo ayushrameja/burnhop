@@ -62,13 +62,16 @@ export class DeathFragments {
   }
 
   spawn(source: DeathFragmentPose, impact: Vec2, seed: number,
-    quality: 'low' | 'medium' | 'high', reducedMotion: boolean): void {
-    const pose: CharacterPose = {
+    quality: 'low' | 'medium' | 'high', reducedMotion: boolean,
+    renderedPose?: Readonly<CharacterPose>): void {
+    const pose: CharacterPose = Object.freeze({
+      ...renderedPose,
       aimAngle: source.aimAngle,
       crouchAmount: source.crouchAmount,
-      weaponId: source.weaponId,
-      reducedMotion: true,
-    };
+      weaponId: source.weaponId ?? renderedPose?.weaponId,
+      reducedMotion: renderedPose?.reducedMotion ?? true,
+      hit: false,
+    });
     const anchors = getCharacterFragmentAnchors(pose);
     const rng = random(seed);
     const facing = Math.cos(source.aimAngle) >= 0 ? 1 : -1;

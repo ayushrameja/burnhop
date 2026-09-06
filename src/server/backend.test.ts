@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Client, type Room as ClientRoom } from '@colyseus/sdk';
 import { COMPATIBILITY_ID, neutralInput } from '../multiplayer/model';
 import { InputWire, MatchWire } from '../multiplayer/wire';
@@ -120,6 +120,91 @@ describe('actual WebSocket backend', () => {
     expect(authority.metrics.snapshot().consecutiveInputBacklogTicks).toBe(0);
     stop();
   });
+
+  it('serializes one contested pickup owner and preserves both weapon instances through a refresh reconnect', async () => {
+    const authority = BurnhopRoom.active!, winner = rooms[2], loser = rooms[3], observer = rooms[0];
+    const id = winner.sessionId, rivalId = loser.sessionId;
+    const actor = authority.match.players[id], rival = authority.match.players[rivalId];
+    const pickup = Object.values(authority.match.pickups).find(p => p.available && p.weapon.weaponId === 'uzi')!;
+    expect(pickup).toBeDefined();
+    const mainId = actor.weapon.instanceId, offhandId = pickup.weapon.instanceId;
+    const mainAmmo = actor.weapon.ammo, mainCounter = actor.weapon.shotCounter;
+    const offhandAmmo = pickup.weapon.ammo, offhandCounter = pickup.weapon.shotCounter;
+    const events: Array<{ type: string; instanceId?: string; actorId: string }> = [];
+    const stopEvents = observer.onMessage<typeof events>('events', batch => events.push(...batch));
+    const frames = [winner, loser].map(room => room.input({ type: InputWire, mode: 'reliable' }));
+    // Hold only this local test room's simulation until both genuine socket frames
+    // arrive, so the test exercises a contested tick without scheduler-dependent order.
+    const stepping = authority as unknown as { step(): void };
+    const originalStep = stepping.step.bind(authority);
+    let held = true;
+    const stepSpy = vi.spyOn(stepping, 'step').mockImplementation(() => { if (!held) originalStep(); });
+    try {
+      for (const player of [actor, rival]) Object.assign(player, {
+        x: pickup.x - player.width / 2, y: pickup.y + 18 - player.height,
+        vx: 0, vy: 0, impulseX: 0, impulseY: 0, grounded: true,
+      });
+      for (const frame of frames) {
+        Object.assign(frame.data, neutralInput(), { pairPressed: true }); frame.send();
+      }
+      await waitUntil(() => [id, rivalId].every(playerId => authority.inputs.get(playerId).size === 1));
+      held = false;
+      await waitUntil(() => [winner, loser, observer].every(room =>
+        room.state.players.get(id)?.offhandInstanceId === offhandId && room.state.pickups.get(pickup.id)?.available === false));
+      expect(actor.offhand?.instanceId).toBe(offhandId);
+      expect(rival.offhand).toBeNull();
+      expect(loser.state.players.get(rivalId)?.hasOffhand).toBe(false);
+      await waitUntil(() => events.some(event => event.type === 'pickup' && event.instanceId === offhandId));
+      expect(events.filter(event => event.type === 'pickup' && event.instanceId === offhandId)).toEqual([
+        expect.objectContaining({ actorId: id }),
+      ]);
+
+      // Aim away from the arena; thirteen real input frames fire one pistol shot
+      // and two staggered UZI shots, producing different non-default hand counters.
+      await waitUntil(() => actor.equipTicks === 0);
+      rival.x += 100;
+      for (let tick = 0; tick < 13; tick++) {
+        Object.assign(frames[0].data, neutralInput(-Math.PI / 2, tick), { fireHeld: true }); frames[0].send();
+      }
+      const expected = {
+        instanceId: mainId, ammo: mainAmmo - 1, shotCounter: mainCounter + 1,
+        hasOffhand: true, offhandInstanceId: offhandId, offhandAmmo: offhandAmmo - 2, offhandShotCounter: offhandCounter + 2,
+        weaponId: 'pistol', offhandWeaponId: 'uzi', reserve: -1, offhandReserve: -1,
+      };
+      await waitUntil(() => [winner, observer].every(room => room.state.players.get(id)?.offhandShotCounter === expected.offhandShotCounter
+        && room.state.players.get(id)?.shotCounter === expected.shotCounter) && authority.inputs.get(id).size === 0);
+      expect(winner.state.players.get(id)).toMatchObject(expected);
+      expect(observer.state.players.get(id)).toMatchObject(expected);
+
+      const token = winner.reconnectionToken;
+      winner.reconnection.enabled = false;
+      rooms.splice(rooms.indexOf(winner), 1);
+      winner.connection.close(1000, 'combat refresh');
+      await waitUntil(() => authority.match.players[id]?.connected === false);
+      const restored = await client().reconnect(token, MatchWire); rooms.push(restored);
+      restored.onMessage('events', () => undefined); restored.onMessage('resync', () => undefined); restored.onMessage('notice', () => undefined);
+      await waitUntil(() => restored.state.players.get(id)?.connected === true && observer.state.players.get(id)?.connected === true);
+      expect(restored.sessionId).toBe(id);
+      expect(restored.reconnectionToken).not.toBe(token);
+      const resumedTick = authority.match.tick;
+      await waitUntil(() => restored.state.tick >= resumedTick + 8 && observer.state.tick >= resumedTick + 8);
+      // Recovery must not replay the old socket's held trigger during idle ticks.
+      expect(restored.state.players.get(id)).toMatchObject(expected);
+      expect(observer.state.players.get(id)).toMatchObject(expected);
+      expect(restored.state.players.size).toBe(8);
+      expect(Object.keys(authority.match.players)).toHaveLength(8);
+      expect(authority.inputs.get(id).size).toBe(0);
+      const owned = Object.values(authority.match.players).flatMap(player =>
+        player.health > 0 ? [player.weapon.instanceId, ...(player.offhand ? [player.offhand.instanceId] : [])] : []);
+      owned.push(...Object.values(authority.match.pickups).filter(item => item.available).map(item => item.weapon.instanceId));
+      for (const instanceId of [mainId, offhandId]) expect(owned.filter(value => value === instanceId)).toHaveLength(1);
+      const decodedOwners = [...restored.state.players.values()].flatMap(player =>
+        [player.instanceId, ...(player.hasOffhand ? [player.offhandInstanceId] : [])]);
+      for (const instanceId of [mainId, offhandId]) expect(decodedOwners.filter(value => value === instanceId)).toHaveLength(1);
+    } finally {
+      held = false; stepSpy.mockRestore(); stopEvents();
+    }
+  }, 8000);
 
   it('transfers host on explicit departure without stopping the authoritative match', async () => {
     const host = rooms.shift()!;

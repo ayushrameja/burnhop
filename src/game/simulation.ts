@@ -255,8 +255,11 @@ function updateMovement(p: PlayerState, command: ActorInput, solids: readonly Co
 function fireShot(player: PlayerState, hand: WeaponHand, weapon: WeaponState, solids: readonly CollisionSolid[]): ShotEvent {
   const config = WEAPONS[weapon.weaponId], dual = player.offhand !== null;
   const origin = getWeaponOrigin(player, hand), shotCounter = ++weapon.shotCounter;
+  const stanceSpread = player.grounded
+    ? 1 - (1 - WEAPON_HANDLING.crouchSpreadMultiplier) * player.crouchAmount
+    : WEAPON_HANDLING.airborneSpreadMultiplier;
   const spread = (config.spreadDegrees + (config.maxSpreadDegrees - config.spreadDegrees) * weapon.bloom)
-    * (1 - .25 * player.crouchAmount) * (player.grounded ? 1 : 1.5) * (dual ? DUAL_CONFIG.spreadMultiplier : 1);
+    * stanceSpread * (dual ? DUAL_CONFIG.spreadMultiplier : 1);
   const angle = player.aimAngle + (weapon.recoil + (weaponRandom(weapon.instanceId, shotCounter, 0) * 2 - 1) * spread) * Math.PI / 180;
   const direction = { x: Math.cos(angle), y: Math.sin(angle) };
   let distance = config.range;
@@ -270,11 +273,11 @@ function fireShot(player: PlayerState, hand: WeaponHand, weapon: WeaponState, so
   weapon.ammo--;
   weapon.cooldownTicks = config.cooldownTicks * (dual ? DUAL_CONFIG.cooldownMultiplier : 1);
   weapon.bloom = Math.min(1, weapon.bloom + 1 / WEAPON_HANDLING.bloomShots);
-  const random = weaponRandom(weapon.instanceId, shotCounter, 1);
   // The AK wanders in both directions. Other weapons have a steadier, aim-relative upward kick.
+  const kickDirection = weapon.weaponId === 'ak47' ? (weaponRandom(weapon.instanceId, shotCounter, 1) < .5 ? -1 : 1)
+    : -(Math.cos(player.aimAngle) >= 0 ? 1 : -1);
   const kick = config.recoilDegrees * (dual ? DUAL_CONFIG.recoilMultiplier : 1)
-    * (weapon.weaponId === 'ak47' ? (random < .5 ? -1 : 1) * (.65 + .35 * Math.abs(random * 2 - 1))
-      : -(Math.cos(player.aimAngle) >= 0 ? 1 : -1) * (.8 + .2 * random));
+    * kickDirection;
   weapon.recoil = Math.max(-WEAPON_HANDLING.recoilCapDegrees, Math.min(WEAPON_HANDLING.recoilCapDegrees, weapon.recoil + kick));
   const barrelOffset = distance < config.muzzleLength ? 0 : config.muzzleLength;
   return { type: 'shot', weaponId: weapon.weaponId, hand, instanceId: weapon.instanceId, shotCounter,

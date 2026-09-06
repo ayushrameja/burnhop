@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import arena from '../../public/assets/arena.json';
-import { Renderer } from './renderer';
+import { Renderer, type OnlineRenderActor, type PresentationEvent } from './renderer';
 import { CONFIG, cloneWorld, createWorld } from './simulation';
 import { ZOOM_SCALES, type ZoomLevel } from './camera';
 import { DEFAULT_APPEARANCE } from './appearance';
 import { CHARACTER_SCALE, getStanceHeight } from './stance';
 import { calculateCharacterPose } from './character';
 import { calculateDetailedCharacterRig } from './detailedCharacter';
+import * as characterArtwork from './detailedCharacter';
+import { DeathFragments } from './deathFragments';
 import { getReloadProgress } from './reload';
 import { GRAPHICS_PRESETS } from './graphics';
 import { WEAPONS } from './weapons';
@@ -30,7 +32,53 @@ function setup(width = 1280, height = 720) {
   return { renderer, world, rotate };
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+describe('last rendered death poses', () => {
+  function actorsFor(world: ReturnType<typeof createWorld>): OnlineRenderActor[] {
+    return ['local', 'remote'].map((id, index) => ({
+      player: { ...world.player, id, x: world.player.x + index * 100, grounded: true, vx: 160,
+        weapon: { ...world.player.weapon, reloadTicks: 36 } },
+      appearance: DEFAULT_APPEARANCE, nickname: id, connected: true, protected: false, lifeId: 7,
+    }));
+  }
+  function deathOf(actor: OnlineRenderActor): PresentationEvent {
+    return { type: 'targetDeath', id: `death:${actor.player.id}:${actor.lifeId}`, actorId: actor.player.id,
+      lifeId: actor.lifeId, x: actor.player.x, y: actor.player.y,
+      deathPose: { ...actor.player, appearance: actor.appearance }, cosmeticSeed: 2, impactDirection: { x: 1, y: 0 } };
+  }
+
+  it.each(['local', 'remote'])('freezes %s gait and reload arms from the last frame actually drawn', id => {
+    const { renderer, world } = setup();
+    const actors = actorsFor(world), victim = actors.find(actor => actor.player.id === id)!;
+    const draw = vi.spyOn(characterArtwork, 'drawDetailedCharacter');
+    const spawn = vi.spyOn(DeathFragments.prototype, 'spawn');
+    renderer.renderOnline(actors, 'local', 1, [], .05);
+    const visiblePose = draw.mock.calls.find(call => call[1] === victim.player.x + victim.player.width / 2)![4];
+    expect(visiblePose.walkPhase).toBeGreaterThan(0);
+    expect(visiblePose.reloadProgress).toBeGreaterThan(0);
+    victim.player.health = 0;
+    victim.player.weapon.reloadTicks = 0;
+    renderer.renderOnline(actors, 'local', 2, [deathOf(victim)], 0);
+    const frozen = spawn.mock.calls.at(-1)![5];
+    expect(frozen).toEqual(visiblePose);
+    expect(Object.isFrozen(frozen)).toBe(true);
+    expect(frozen?.reloadProgress).toBeGreaterThan(0);
+  });
+
+  it.each(['new life', 'removed actor', 'presentation reset'])('falls back safely after %s', reason => {
+    const { renderer, world } = setup();
+    const actors = actorsFor(world), victim = actors[1];
+    renderer.renderOnline(actors, 'local', 1, [], .05);
+    if (reason === 'new life') victim.lifeId++;
+    if (reason === 'removed actor') renderer.renderOnline([actors[0]], 'local', 2, [], 0);
+    if (reason === 'presentation reset') renderer.resetOnlinePresentation();
+    victim.player.health = 0;
+    const spawn = vi.spyOn(DeathFragments.prototype, 'spawn');
+    renderer.renderOnline(actors, 'local', 3, [deathOf(victim)], 0);
+    expect(spawn.mock.calls.at(-1)![5]).toBeUndefined();
+  });
+});
 
 describe('live visual aim', () => {
   it('draws the reload from simulation ticks without advancing it or moving the firing direction', () => {

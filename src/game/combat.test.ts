@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { applyKnockback, calculateDamage, getHitRegions, rayHitRegions, resolveMeleeTarget } from './combat';
 import { cloneActor, compileArena, createWorld, getWeaponOrigin, stepActor, type ActorInput } from './simulation';
+import { getStanceHeight } from './stance';
 import type { Arena, GameEvent, PlayerState, WeaponId } from './types';
 import { cancelReload, createWeapon, equipWeapon, MELEE_CONFIG, WEAPONS } from './weapons';
 
@@ -91,6 +92,28 @@ describe('deterministic per-instance firing', () => {
     expect(Math.hypot(shot.directionX, shot.directionY)).toBeCloseTo(1);
     expect(shot.toY).toBeCloseTo(shot.originY + (shot.toX - shot.originX) / shot.directionX * shot.directionY);
   });
+  it('gives partially crouched airborne shots the same spread as standing airborne shots', () => {
+    const standing = actor('ak47'); standing.y = 200; standing.grounded = false;
+    standing.weapon.bloom = .5; standing.weapon.shotCounter = 7;
+    const crouched = cloneActor(standing); crouched.crouchAmount = .75;
+    crouched.height = getStanceHeight(crouched.crouchAmount); crouched.y += standing.height - crouched.height;
+    const command = { fireHeld: true, crouchHeld: true, aimAngle: .2 };
+    const standingShot = step(standing, command).find(e => e.type === 'shot')!;
+    const crouchedShot = step(crouched, command).find(e => e.type === 'shot')!;
+    expect(crouched.grounded).toBe(false); expect(standing.grounded).toBe(false);
+    expect(crouched.crouchAmount).toBeGreaterThan(0); expect(crouched.crouchAmount).toBeLessThan(.75);
+    expect([crouchedShot.instanceId, crouchedShot.shotCounter]).toEqual([standingShot.instanceId, standingShot.shotCounter]);
+    expect([crouchedShot.directionX, crouchedShot.directionY]).toEqual([standingShot.directionX, standingShot.directionY]);
+  });
+  it('retains the approved 25 percent accuracy bonus for a fully grounded crouch', () => {
+    const standing = actor('ak47'), crouched = cloneActor(standing);
+    crouched.crouchAmount = 1; crouched.height = getStanceHeight(1); crouched.y += standing.height - crouched.height;
+    const standingShot = step(standing, { fireHeld: true }).find(e => e.type === 'shot')!;
+    const crouchedShot = step(crouched, { fireHeld: true, crouchHeld: true }).find(e => e.type === 'shot')!;
+    expect(crouched.grounded).toBe(true); expect(crouched.crouchAmount).toBe(1);
+    expect(Math.atan2(crouchedShot.directionY, crouchedShot.directionX))
+      .toBeCloseTo(Math.atan2(standingShot.directionY, standingShot.directionX) * .75);
+  });
   it('keeps AK kick between sustained shots and restores a rested ray after trigger release', () => {
     const player = actor('ak47'); step(player, { fireHeld: true });
     const kick = player.weapon.recoil;
@@ -103,6 +126,27 @@ describe('deterministic per-instance firing', () => {
     expect(Math.atan2(sustainedShot.directionY, sustainedShot.directionX)
       - Math.atan2(restedShot.directionY, restedShot.directionX)).toBeCloseTo(kick * Math.PI / 180);
     run(player, 45); expect(player.weapon.recoil).toBe(0); expect(player.weapon.bloom).toBe(0);
+  });
+  it.each(Object.keys(WEAPONS) as WeaponId[])('uses the exact configured %s kick magnitude in either aim direction', id => {
+    for (const aimAngle of [0, Math.PI]) for (const dual of WEAPONS[id].dualWield ? [false, true] : [false]) {
+      const player = actor(id);
+      if (dual) player.offhand = createWeapon('pistol', 'paired-pistol');
+      step(player, { fireHeld: true, aimAngle });
+      const magnitude = WEAPONS[id].recoilDegrees * (dual ? 1.3 : 1);
+      expect(Math.abs(player.weapon.recoil)).toBe(magnitude);
+      if (id !== 'ak47') expect(player.weapon.recoil).toBe((aimAngle === 0 ? -1 : 1) * magnitude);
+    }
+  });
+  it('varies AK kick direction deterministically while retaining its 1.4 degree magnitude', () => {
+    const kicks = new Set<number>();
+    for (let index = 0; index < 16; index++) {
+      const player = actor('ak47'); player.weapon.instanceId = `wander:${index}`;
+      const replay = cloneActor(player);
+      step(player, { fireHeld: true }); step(replay, { fireHeld: true });
+      expect(replay.weapon.recoil).toBe(player.weapon.recoil);
+      kicks.add(player.weapon.recoil);
+    }
+    expect([...kicks].sort((a, b) => a - b)).toEqual([-1.4, 1.4]);
   });
   it('staggered dual UMPs alternate four/five-tick spacing and keep unique shot counters', () => {
     const player = actor('ump'); player.offhand = createWeapon('ump', 'second-ump');

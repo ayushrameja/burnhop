@@ -35,7 +35,8 @@ export const DUAL_CONFIG = Object.freeze({ cooldownMultiplier: 1.5, spreadMultip
 export const MELEE_CONFIG = Object.freeze({ damage: 20, range: 56, halfArcDegrees: 55, windupTicks: 6,
   cooldownTicks: 36, fireLockTicks: 12, knockbackX: 220, knockbackY: 80, impulseDecaySeconds: .18 });
 export const WEAPON_HANDLING = Object.freeze({ equipTicks: 18, bloomShots: 6, bloomRecoveryTicks: 36,
-  recoilCapDegrees: 8, recoilRecoveryDegreesPerTick: 12 / 60 });
+  recoilCapDegrees: 8, recoilRecoveryDegreesPerTick: 12 / 60,
+  crouchSpreadMultiplier: .75, airborneSpreadMultiplier: 1.5 });
 
 export function createWeapon(weaponId: WeaponId = 'pistol', instanceId = `initial:${weaponId}`): WeaponState {
   return { weaponId, instanceId, ammo: WEAPONS[weaponId].magazineSize, reserve: weaponId === 'sniper' ? 10 : -1,

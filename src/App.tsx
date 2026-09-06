@@ -398,7 +398,7 @@ export default function App() {
       <div className="entry-action">
         <p className="entry-eyebrow"><Mark /><span>JETPACKS ON. GOOD SENSE OFF.</span></p>
         <h1 className="entry-wordmark">BURN<span>HOP</span></h1>
-        <p className="entry-tagline">Small pilots. Big trouble.</p>
+        <p className="entry-tagline">Small pilots. Poor impulse control.</p>
         <button ref={gateButtonRef} className="entry-button" disabled={gatePending} onClick={enterShell}>
           <svg aria-hidden="true" viewBox="0 0 24 24" fill="none"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5" stroke="currentColor" strokeWidth="1.3" /></svg>
           {gatePending ? 'Entering fullscreen…' : entered ? 'Return to fullscreen' : 'Enter game'}

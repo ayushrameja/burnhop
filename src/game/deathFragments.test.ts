@@ -28,6 +28,20 @@ describe('cosmetic death pieces',()=>{
     expect(JSON.stringify(actor)).toBe(before);
     pieces.clear();expect(pieces.count).toBe(0);
   });
+  it('copies local gait and arm timing while authority supplies aim and stance',()=>{
+    const pieces=new DeathFragments(),actor=source();
+    const renderedPose={aimAngle:1,crouchAmount:.5,walkPhase:1.7,walkAmount:.9,locomotion:true,
+      weaponId:'pistol' as const,offhandWeaponId:'uzi' as const,reloadProgress:.4,offhandRecoil:.3,reducedMotion:false,hit:true};
+    pieces.spawn(actor,{x:1,y:0},2,'low',true,renderedPose);
+    renderedPose.walkPhase=8;renderedPose.reloadProgress=.9;
+    vi.mocked(drawCharacterFragment).mockClear();pieces.draw(context(),{x:0,y:0},{x:800,y:600});
+    const frozen=vi.mocked(drawCharacterFragment).mock.calls[0][2];
+    expect(frozen).toMatchObject({aimAngle:actor.aimAngle,crouchAmount:actor.crouchAmount,
+      walkPhase:1.7,walkAmount:.9,reloadProgress:.4,offhandWeaponId:'uzi',offhandRecoil:.3,reducedMotion:false,hit:false});
+    expect(Object.isFrozen(frozen)).toBe(true);
+    pieces.update(.25,floor,800);pieces.draw(context(),{x:0,y:0},{x:800,y:600});
+    expect(vi.mocked(drawCharacterFragment).mock.calls.at(-1)![2]).toEqual(frozen);
+  });
   it('keeps low effects to three complete groups within the lower pool cap',()=>{
     const low=new DeathFragments(),reduced=new DeathFragments();
     low.spawn(source(),{x:1,y:0},1,'low',false);reduced.spawn(source(),{x:1,y:0},1,'high',true);

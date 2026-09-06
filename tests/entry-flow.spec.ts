@@ -3,12 +3,25 @@ import { installCapture, fixtureState, openMenu, enterPractice } from './helpers
 
 test.beforeEach(async ({ page }) => { await installCapture(page); });
 
+test('branded desktop entrance presents the approved copy and visible gesture controls', async ({ page }, testInfo) => {
+  await page.goto('/');
+  const gate = page.getByTestId('fullscreen-gate');
+  await expect(gate.getByRole('heading', { name: 'BURNHOP', exact: true })).toBeVisible();
+  await expect(gate.getByText('JETPACKS ON. GOOD SENSE OFF.', { exact: true })).toBeVisible();
+  await expect(gate.getByText('Small pilots. Poor impulse control.', { exact: true })).toBeVisible();
+  await expect(gate.getByRole('button', { name: 'Enter game', exact: true })).toBeInViewport();
+  await expect(gate.getByRole('button', { name: 'Entry sound: off', exact: true })).toBeInViewport();
+  await expect(page.getByTestId('entry-dancer')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('approved-desktop-entry.png') });
+});
+
 test('entry pilot holds one readable reduced-motion pose on a compact viewport', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 780 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');
   const pilot = page.getByTestId('entry-dancer');
   await expect(pilot).toBeVisible();
+  await expect(page.getByText('Small pilots. Poor impulse control.', { exact: true })).toBeVisible();
   const first = await pilot.evaluate(canvas => (canvas as HTMLCanvasElement).toDataURL());
   await page.waitForTimeout(250);
   expect(await pilot.evaluate(canvas => (canvas as HTMLCanvasElement).toDataURL())).toBe(first);
