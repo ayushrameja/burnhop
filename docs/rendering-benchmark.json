@@ -1,0 +1,457 @@
+{
+  "date": "2026-09-06",
+  "baselineCommit": "996b89b",
+  "host": "macOS, headless Chromium, 1440 x 810 CSS pixels, no other tests running during benchmarks",
+  "scope": "Isolated renderer, 8 actors (4 offscreen), 150 frames, zoom changes at frames 65 and 100. Warm submissions exclude first 20 frames and transition frames. Frame intervals include zoom transitions but exclude first 20 frames. This does not measure React, networking, end-to-end input latency or native Windows GPU performance.",
+  "runs": {
+    "before": {
+      "note": "Headless Chromium on the current host; high quality, eight actors. CPU submission excludes asynchronous raster/GPU completion. Not a Windows FPS guarantee.",
+      "results": [
+        {
+          "density": 1,
+          "canvas": {
+            "width": 1440,
+            "height": 810
+          },
+          "submissionMs": {
+            "median": 0.7999999970197678,
+            "p95": 0.8999999985098839,
+            "max": 1,
+            "mean": 0.7637795274417232
+          },
+          "intervalMs": {
+            "median": 16.699999999999818,
+            "p95": 16.799999999999955,
+            "max": 116.79999999999973,
+            "mean": 17.828682170542635
+          },
+          "transitions": [
+            {
+              "frame": 0,
+              "workMs": 136.80000000447035
+            },
+            {
+              "frame": 65,
+              "workMs": 58.20000000298023
+            },
+            {
+              "frame": 100,
+              "workMs": 110.89999999850988
+            }
+          ]
+        },
+        {
+          "density": 2,
+          "canvas": {
+            "width": 2880,
+            "height": 1620
+          },
+          "submissionMs": {
+            "median": 28.399999998509884,
+            "p95": 29,
+            "max": 32.29999999701977,
+            "mean": 21.122047244329153
+          },
+          "intervalMs": {
+            "median": 50,
+            "p95": 66.69999999999982,
+            "max": 233.30000000000018,
+            "mean": 54.38992248062018
+          },
+          "transitions": [
+            {
+              "frame": 0,
+              "workMs": 232.5
+            },
+            {
+              "frame": 65,
+              "workMs": 138.5
+            },
+            {
+              "frame": 100,
+              "workMs": 221.69999999552965
+            }
+          ]
+        }
+      ]
+    },
+    "high": {
+      "variant": "high",
+      "note": "Headless Chromium on the current host; eight actors, fixed camera route. Renderer is called every animation frame to compare cost independently of the runtime frame cap. CPU submission excludes asynchronous raster/GPU completion. Not a Windows FPS guarantee.",
+      "results": [
+        {
+          "density": 1,
+          "canvas": {
+            "width": 1440,
+            "height": 810
+          },
+          "submissionMs": {
+            "median": 0.5,
+            "p95": 0.6000000014901161,
+            "max": 0.7000000029802322,
+            "mean": 0.48818897649528475
+          },
+          "intervalMs": {
+            "median": 16.699999999999818,
+            "p95": 16.799999999999727,
+            "max": 16.800000000000182,
+            "mean": 16.66589147286822
+          },
+          "transitions": [
+            {
+              "frame": 0,
+              "workMs": 8.899999998509884
+            },
+            {
+              "frame": 65,
+              "workMs": 0.6000000014901161
+            },
+            {
+              "frame": 100,
+              "workMs": 0.5
+            }
+          ],
+          "diagnostics": {
+            "graphics": {
+              "renderScale": 1,
+              "frameRate": 0,
+              "scenery": "high",
+              "effects": "high"
+            },
+            "canvas": {
+              "width": 1440,
+              "height": 810
+            },
+            "devicePixelRatio": 1,
+            "zoom": 1,
+            "drawnActors": 4,
+            "culledActors": 4,
+            "particles": 0,
+            "characterCacheBytes": 71808,
+            "terrain": {
+              "mode": "worker",
+              "cacheBytes": 24297580,
+              "budgetBytes": 134217728,
+              "readyTextures": 8,
+              "preparedTextures": 8,
+              "evictions": 0,
+              "pendingTextures": 0
+            }
+          }
+        },
+        {
+          "density": 2,
+          "canvas": {
+            "width": 2880,
+            "height": 1620
+          },
+          "submissionMs": {
+            "median": 28.600000001490116,
+            "p95": 31.69999999552965,
+            "max": 32,
+            "mean": 29.257480315336093
+          },
+          "intervalMs": {
+            "median": 50,
+            "p95": 66.60000000000014,
+            "max": 66.70000000000073,
+            "mean": 51.41860465116283
+          },
+          "transitions": [
+            {
+              "frame": 0,
+              "workMs": 9.800000004470348
+            },
+            {
+              "frame": 65,
+              "workMs": 30.5
+            },
+            {
+              "frame": 100,
+              "workMs": 28.19999999552965
+            }
+          ],
+          "diagnostics": {
+            "graphics": {
+              "renderScale": 1,
+              "frameRate": 0,
+              "scenery": "high",
+              "effects": "high"
+            },
+            "canvas": {
+              "width": 2880,
+              "height": 1620
+            },
+            "devicePixelRatio": 2,
+            "zoom": 1,
+            "drawnActors": 4,
+            "culledActors": 4,
+            "particles": 0,
+            "characterCacheBytes": 161568,
+            "terrain": {
+              "mode": "worker",
+              "cacheBytes": 58643084,
+              "budgetBytes": 134217728,
+              "readyTextures": 8,
+              "preparedTextures": 8,
+              "evictions": 0,
+              "pendingTextures": 0
+            }
+          }
+        }
+      ]
+    },
+    "balanced": {
+      "variant": "balanced",
+      "note": "Headless Chromium on the current host; eight actors, fixed camera route. Renderer is called every animation frame to compare cost independently of the runtime frame cap. CPU submission excludes asynchronous raster/GPU completion. Not a Windows FPS guarantee.",
+      "results": [
+        {
+          "density": 1,
+          "canvas": {
+            "width": 1080,
+            "height": 608
+          },
+          "submissionMs": {
+            "median": 0.5,
+            "p95": 0.6000000014901161,
+            "max": 0.7999999970197678,
+            "mean": 0.5125984246805897
+          },
+          "intervalMs": {
+            "median": 16.699999999999932,
+            "p95": 16.799999999999727,
+            "max": 16.800000000000182,
+            "mean": 16.66589147286822
+          },
+          "transitions": [
+            {
+              "frame": 0,
+              "workMs": 8.600000001490116
+            },
+            {
+              "frame": 65,
+              "workMs": 0.5
+            },
+            {
+              "frame": 100,
+              "workMs": 0.5
+            }
+          ],
+          "diagnostics": {
+            "graphics": {
+              "renderScale": 0.75,
+              "frameRate": 60,
+              "scenery": "medium",
+              "effects": "medium"
+            },
+            "canvas": {
+              "width": 1080,
+              "height": 608
+            },
+            "devicePixelRatio": 1,
+            "zoom": 1,
+            "drawnActors": 4,
+            "culledActors": 4,
+            "particles": 0,
+            "characterCacheBytes": 71808,
+            "terrain": {
+              "mode": "worker",
+              "cacheBytes": 24297580,
+              "budgetBytes": 134217728,
+              "readyTextures": 8,
+              "preparedTextures": 8,
+              "evictions": 0,
+              "pendingTextures": 0
+            }
+          }
+        },
+        {
+          "density": 2,
+          "canvas": {
+            "width": 2160,
+            "height": 1215
+          },
+          "submissionMs": {
+            "median": 0.5,
+            "p95": 0.7000000029802322,
+            "max": 0.7999999970197678,
+            "mean": 0.5204724407806172
+          },
+          "intervalMs": {
+            "median": 33.30000000000018,
+            "p95": 33.40000000000009,
+            "max": 33.400000000000546,
+            "mean": 30.101550387596895
+          },
+          "transitions": [
+            {
+              "frame": 0,
+              "workMs": 9.699999995529652
+            },
+            {
+              "frame": 65,
+              "workMs": 0.5
+            },
+            {
+              "frame": 100,
+              "workMs": 0.5
+            }
+          ],
+          "diagnostics": {
+            "graphics": {
+              "renderScale": 0.75,
+              "frameRate": 60,
+              "scenery": "medium",
+              "effects": "medium"
+            },
+            "canvas": {
+              "width": 2160,
+              "height": 1215
+            },
+            "devicePixelRatio": 2,
+            "zoom": 1,
+            "drawnActors": 4,
+            "culledActors": 4,
+            "particles": 0,
+            "characterCacheBytes": 161568,
+            "terrain": {
+              "mode": "worker",
+              "cacheBytes": 31109344,
+              "budgetBytes": 134217728,
+              "readyTextures": 8,
+              "preparedTextures": 8,
+              "evictions": 0,
+              "pendingTextures": 0
+            }
+          }
+        }
+      ]
+    },
+    "low": {
+      "variant": "low",
+      "note": "Headless Chromium on the current host; eight actors, fixed camera route. Renderer is called every animation frame to compare cost independently of the runtime frame cap. CPU submission excludes asynchronous raster/GPU completion. Not a Windows FPS guarantee.",
+      "results": [
+        {
+          "density": 1,
+          "canvas": {
+            "width": 720,
+            "height": 405
+          },
+          "submissionMs": {
+            "median": 0.5,
+            "p95": 0.6000000014901161,
+            "max": 0.6999999955296516,
+            "mean": 0.4960629921846502
+          },
+          "intervalMs": {
+            "median": 16.69999999999999,
+            "p95": 16.700000000000273,
+            "max": 16.800000000000182,
+            "mean": 16.665891472868214
+          },
+          "transitions": [
+            {
+              "frame": 0,
+              "workMs": 8.899999998509884
+            },
+            {
+              "frame": 65,
+              "workMs": 0.5
+            },
+            {
+              "frame": 100,
+              "workMs": 0.5
+            }
+          ],
+          "diagnostics": {
+            "graphics": {
+              "renderScale": 0.5,
+              "frameRate": 60,
+              "scenery": "low",
+              "effects": "low"
+            },
+            "canvas": {
+              "width": 720,
+              "height": 405
+            },
+            "devicePixelRatio": 1,
+            "zoom": 1,
+            "drawnActors": 4,
+            "culledActors": 4,
+            "particles": 0,
+            "characterCacheBytes": 17952,
+            "terrain": {
+              "mode": "worker",
+              "cacheBytes": 7777336,
+              "budgetBytes": 134217728,
+              "readyTextures": 8,
+              "preparedTextures": 8,
+              "evictions": 0,
+              "pendingTextures": 0
+            }
+          }
+        },
+        {
+          "density": 2,
+          "canvas": {
+            "width": 1440,
+            "height": 810
+          },
+          "submissionMs": {
+            "median": 0.5,
+            "p95": 0.6000000014901161,
+            "max": 0.7000000029802322,
+            "mean": 0.5062992130442867
+          },
+          "intervalMs": {
+            "median": 16.699999999999818,
+            "p95": 16.700000000000273,
+            "max": 16.800000000000182,
+            "mean": 16.66589147286822
+          },
+          "transitions": [
+            {
+              "frame": 0,
+              "workMs": 9.200000002980232
+            },
+            {
+              "frame": 65,
+              "workMs": 0.5
+            },
+            {
+              "frame": 100,
+              "workMs": 0.3999999985098839
+            }
+          ],
+          "diagnostics": {
+            "graphics": {
+              "renderScale": 0.5,
+              "frameRate": 60,
+              "scenery": "low",
+              "effects": "low"
+            },
+            "canvas": {
+              "width": 1440,
+              "height": 810
+            },
+            "devicePixelRatio": 2,
+            "zoom": 1,
+            "drawnActors": 4,
+            "culledActors": 4,
+            "particles": 0,
+            "characterCacheBytes": 71808,
+            "terrain": {
+              "mode": "worker",
+              "cacheBytes": 7777336,
+              "budgetBytes": 134217728,
+              "readyTextures": 8,
+              "preparedTextures": 8,
+              "evictions": 0,
+              "pendingTextures": 0
+            }
+          }
+        }
+      ]
+    }
+  }
+}

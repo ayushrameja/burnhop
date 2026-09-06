@@ -8,6 +8,7 @@ import { CHARACTER_SCALE, getStanceHeight } from './stance';
 import { calculateCharacterPose } from './character';
 import { calculateDetailedCharacterRig } from './detailedCharacter';
 import { getReloadProgress } from './reload';
+import { GRAPHICS_PRESETS } from './graphics';
 
 // Real rendering calculations with an inert drawing surface: no browser timing assumptions.
 function setup(width = 1280, height = 720) {
@@ -115,6 +116,27 @@ describe('live visual aim', () => {
 });
 
 describe('camera and zoom presentation', () => {
+  it('changes backing resolution without changing world projection, pointer bounds or simulation', () => {
+    const { renderer, world } = setup(1024, 768);
+    const before = cloneWorld(world), bounds = renderer.getPointerBounds(), projected = renderer.worldToScreen(500, 400);
+    for (const preset of ['low', 'balanced', 'high'] as const) {
+      renderer.setGraphics(GRAPHICS_PRESETS[preset]);
+      renderer.render(world, world, 1, DEFAULT_APPEARANCE, [], 0);
+      expect(renderer.getPerformanceDiagnostics().canvas.width).toBe(Math.round(1024 * 2 * GRAPHICS_PRESETS[preset].renderScale));
+      expect(renderer.getPointerBounds()).toEqual(bounds); expect(renderer.worldToScreen(500, 400)).toEqual(projected);
+      expect(world).toEqual(before);
+    }
+  });
+  it('emits exhaust by elapsed time rather than display refresh count', () => {
+    const counts = [60, 144].map(refresh => {
+      const { renderer, world } = setup(); renderer.setGraphics(GRAPHICS_PRESETS.high);
+      world.player.thrusting = true;
+      for (let i = 0; i < refresh; i++) renderer.render(world, world, 1, DEFAULT_APPEARANCE, [], 1 / refresh);
+      const count = renderer.getPerformanceDiagnostics().particles; renderer.destroy(); return count;
+    });
+    expect(Math.abs(counts[0] - counts[1])).toBeLessThanOrEqual(2);
+    expect(counts[0]).toBeGreaterThan(0);
+  });
   it('starts with the largest pilot at 1× and makes the projected pilot smaller at 3× and 5×', () => {
     const { renderer, world } = setup();
     expect(renderer.getCameraDiagnostics().zoomLevel).toBe(1);

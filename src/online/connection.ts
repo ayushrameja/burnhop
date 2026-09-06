@@ -36,11 +36,16 @@ export class OnlineConnection {
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private heartbeat: ReturnType<typeof setInterval> | undefined;
   private inputId = 0;
+  private reservedInputEnd = 0;
 
   constructor(options: { endpoint?: string } = {}) {
     this.endpoint = options.endpoint ?? defaultOnlineEndpoint();
     this.client = this.endpoint ? new Client(this.endpoint) : null;
-    try { this.inputId = Number(sessionStorage.getItem(INPUT_KEY)) || 0; } catch { /* Memory identity still works. */ }
+    try {
+      const saved = Number(sessionStorage.getItem(INPUT_KEY));
+      if (Number.isInteger(saved) && saved >= 0 && saved <= 0xffffffff) this.inputId = saved;
+    } catch { /* Memory identity still works. */ }
+    this.reservedInputEnd = this.inputId;
   }
   getSnapshot = (): OnlineSnapshot => this.snapshot;
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
@@ -48,8 +53,13 @@ export class OnlineConnection {
   onReset(listener: (player?: MatchPlayer) => void): () => void { this.resetListeners.add(listener); return () => this.resetListeners.delete(listener); }
   getRoom(): Room<MatchWire> | null { return this.room; }
   nextInputId(): number {
+    // Persist a range before using it. An abrupt refresh skips unused IDs, so it
+    // cannot replay an old ID, even if unload/dispose never runs. One write/256 inputs.
+    if (this.inputId === this.reservedInputEnd) {
+      this.reservedInputEnd = (this.inputId + 256) >>> 0;
+      try { sessionStorage.setItem(INPUT_KEY, String(this.reservedInputEnd)); } catch { /* Inputs remain usable without storage. */ }
+    }
     this.inputId = (this.inputId + 1) >>> 0;
-    try { sessionStorage.setItem(INPUT_KEY, String(this.inputId)); } catch { /* Inputs keep their in-memory ordering. */ }
     return this.inputId;
   }
   clearError(): void { this.publish({ error: null }); }
@@ -175,7 +185,7 @@ export class OnlineConnection {
     this.lastStatePublished = performance.now();
     const state = room.state;
     this.publish({ sessionId: room.sessionId, code: state.code || room.roomId, phase: state.phase,
-      players: [...state.players.values()].map(playerFromWire).sort((a, b) => a.joinedOrder - b.joinedOrder),
+      players: [...state.players.values()].map(wire => playerFromWire(wire)).sort((a, b) => a.joinedOrder - b.joinedOrder),
       hostId: state.hostId, countdownTicks: state.countdownTicks, remainingTicks: state.remainingTicks,
       winnerIds: [...state.winnerIds], tick: state.tick });
   }

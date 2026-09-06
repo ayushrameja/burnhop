@@ -83,11 +83,11 @@ export function syncPlayerWire(wire: PlayerWire, player: MatchPlayer): void {
   wire.cooldownTicks = player.weapon.cooldownTicks;
 }
 
-export function playerFromWire(wire: PlayerWire): MatchPlayer {
-  const player = {} as MatchPlayer;
+export function playerFromWire(wire: PlayerWire, target?: MatchPlayer): MatchPlayer {
+  const player = target ?? { weapon: { ammo: 0, reloadTicks: 0, cooldownTicks: 0 } } as MatchPlayer;
   for (const key of PLAYER_FIELDS) player[key] = wire[key] as never;
   player.appearance = decodeAppearance(wire);
-  player.weapon = { ammo: wire.ammo, reloadTicks: wire.reloadTicks, cooldownTicks: wire.cooldownTicks };
+  player.weapon.ammo = wire.ammo; player.weapon.reloadTicks = wire.reloadTicks; player.weapon.cooldownTicks = wire.cooldownTicks;
   return player;
 }
 

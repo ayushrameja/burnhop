@@ -237,17 +237,19 @@ describe('fullscreen mouse capture', () => {
     const { capture, document, screen, onLost, keyboard, order } = setup();
     await capture.enter();
     expect(capture.isActive()).toBe(true);
-    expect(keyboard.lock).toHaveBeenCalledWith(['Escape']);
+    expect(keyboard.lock).toHaveBeenLastCalledWith(['Escape', 'KeyW']);
     await capture.pause();
     expect(document.pointerLockElement).toBeNull();
     expect(document.fullscreenElement).toBe(screen);
     expect(capture.isActive()).toBe(false);
+    expect(keyboard.lock).toHaveBeenLastCalledWith(['Escape']);
     expect(keyboard.unlock).not.toHaveBeenCalled();
     expect(onLost).not.toHaveBeenCalled();
     await capture.enter();
     expect(capture.isActive()).toBe(true);
     expect(order).toEqual(['pointerlock', 'fullscreen', 'pointerlock']);
-    expect(keyboard.lock).toHaveBeenCalledTimes(1);
+    expect(keyboard.lock).toHaveBeenLastCalledWith(['Escape', 'KeyW']);
+    expect(keyboard.lock).toHaveBeenCalledTimes(3);
     await capture.release();
     expect(document.fullscreenElement).toBeNull();
     expect(keyboard.unlock).toHaveBeenCalled();
@@ -359,7 +361,75 @@ describe('fullscreen mouse capture', () => {
     await capture.enter();
     expect(capture.isActive()).toBe(true);
     expect(keyboard.lock).toHaveBeenCalledTimes(1);
+    expect(capture.getKeyboardStatus()).toBe('blocked');
     expect(onLost).not.toHaveBeenCalled();
+    capture.destroy();
+  });
+
+  it('requests keyboard capture during the entry gesture before native fullscreen', async () => {
+    const { capture, keyboard, order } = setup();
+    keyboard.lock.mockImplementation(async () => { order.push('keyboard'); });
+    const entering = capture.enter();
+    expect(order).toEqual(['keyboard', 'pointerlock', 'fullscreen']);
+    await entering;
+    expect(capture.getKeyboardStatus()).toBe('active');
+    capture.destroy();
+  });
+
+  it('releases the old gameplay key set if changing back to menu capture is rejected', async () => {
+    const { capture, keyboard } = setup();
+    await capture.enter();
+    keyboard.lock.mockRejectedValueOnce(new Error('Capture revoked'));
+    await capture.pause();
+    expect(capture.getKeyboardStatus()).toBe('blocked');
+    expect(keyboard.unlock).toHaveBeenCalled();
+    expect(capture.isFullscreen()).toBe(true);
+    capture.destroy();
+  });
+
+  it('retries a denied keyboard request on a fresh entry without prompting on every capture event', async () => {
+    const { capture, keyboard, document } = setup();
+    keyboard.lock.mockRejectedValueOnce(new Error('Blocked'));
+    await capture.enterMenu();
+    expect(capture.getKeyboardStatus()).toBe('blocked');
+    for (let i = 0; i < 4; i++) document.dispatchEvent(new Event('fullscreenchange'));
+    expect(keyboard.lock).toHaveBeenCalledTimes(1);
+    await capture.enter();
+    expect(keyboard.lock).toHaveBeenLastCalledWith(['Escape', 'KeyW']);
+    expect(capture.getKeyboardStatus()).toBe('active');
+    capture.destroy();
+  });
+
+  it('offers an explicit retry after synchronous keyboard failure and handles unsupported keyboards', async () => {
+    const { capture, keyboard } = setup();
+    keyboard.lock.mockImplementationOnce(() => { throw new Error('Blocked'); });
+    await capture.enterMenu();
+    expect(capture.getKeyboardStatus()).toBe('blocked');
+    capture.retryKeyboard();
+    await Promise.resolve(); await Promise.resolve();
+    expect(capture.getKeyboardStatus()).toBe('active');
+    await capture.release();
+    keyboard.lock = undefined as unknown as typeof keyboard.lock;
+    await capture.enter();
+    expect(capture.getKeyboardStatus()).toBe('unavailable');
+    expect(capture.isActive()).toBe(true);
+    capture.destroy();
+  });
+
+  it('downgrades a pending gameplay grant after pause and reacquires after a stale grant from prior fullscreen', async () => {
+    const { capture, keyboard } = setup();
+    let grant!: () => void;
+    keyboard.lock.mockImplementationOnce(() => new Promise<void>(resolve => { grant = resolve; }));
+    await capture.enter(); await capture.pause();
+    grant(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(keyboard.lock).toHaveBeenLastCalledWith(['Escape']);
+    await capture.release();
+    keyboard.lock.mockImplementationOnce(() => new Promise<void>(resolve => { grant = resolve; }));
+    await capture.enter(); await capture.release();
+    await capture.enterMenu();
+    grant(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(keyboard.lock).toHaveBeenLastCalledWith(['Escape']);
+    expect(capture.getKeyboardStatus()).toBe('active');
     capture.destroy();
   });
 

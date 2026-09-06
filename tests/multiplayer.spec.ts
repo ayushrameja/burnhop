@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { installCapture, enterFullscreen } from './helpers/capture';
+import { installCapture, enterFullscreen, fixtureState } from './helpers/capture';
 
 async function openOnline(page: Page, name: string, code = '') {
   await installCapture(page);
@@ -24,6 +24,7 @@ test('private invitations, readiness, match capture, locked joins, refresh and h
     await openOnline(host, 'Canada Pilot');
     await host.getByRole('button', { name: 'Create private room', exact: true }).click();
     await expect(host.getByRole('heading', { name: 'OUTPOST', exact: true })).toBeVisible();
+    expect(await host.evaluate(() => !window.dispatchEvent(new Event('beforeunload', { cancelable: true })))).toBe(false);
     const invite = await host.getByRole('textbox', { name: 'Invite link', exact: true }).inputValue();
     expect(new URL(invite).origin).toBe('https://burnhop.lowhp.studio');
     const code = new URL(invite).searchParams.get('room')!;
@@ -68,11 +69,43 @@ test('private invitations, readiness, match capture, locked joins, refresh and h
     expect(diagnostics.reconciliations).toBeGreaterThan(0);
     await testInfo.attach('local-performance', { body: JSON.stringify(diagnostics, null, 2), contentType: 'application/json' });
     await host.screenshot({ path: testInfo.outputPath('online-play.png') });
+    const beforeClose = await host.evaluate(() => window.__BURNHOP_ONLINE__!.snapshot().local!.id);
+    const closeDialog = host.waitForEvent('dialog');
+    await host.close({ runBeforeUnload: true });
+    const dialog = await closeDialog;
+    expect(dialog.type()).toBe('beforeunload');
+    await dialog.dismiss();
+    expect(host.isClosed()).toBe(false);
+    await expect(host.getByRole('heading', { name: 'MATCH CONTINUES', exact: true })).toBeVisible();
+    expect(await host.evaluate(() => window.__BURNHOP_ONLINE__!.snapshot().local!.id)).toBe(beforeClose);
+    await expect(host.locator('.online-standings tbody tr')).toHaveCount(2);
     await host.evaluate(() => window.dispatchEvent(new Event('blur')));
     await expect(host.getByRole('heading', { name: 'MATCH CONTINUES', exact: true })).toBeVisible();
     await expect(host.getByRole('button', { name: 'Enter match', exact: true })).toBeEnabled();
 
+    await host.getByRole('button', { name: /Settings & controls/i }).click();
+    await host.getByRole('tab', { name: 'Graphics' }).click();
+    await host.getByRole('group', { name: 'Graphics preset' }).getByRole('button', { name: /^Low/ }).click();
+    await expect.poll(() => host.evaluate(() => window.__BURNHOP_ONLINE__!.snapshot().rendering.graphics.renderScale)).toBe(.5);
+    await host.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true,
+      value: { writeText: async () => { throw new Error('Clipboard unavailable'); } } }));
+    await host.getByRole('button', { name: 'Copy performance report' }).click();
+    const report = JSON.parse(await host.getByRole('textbox', { name: 'Performance report' }).inputValue());
+    expect(report.session.mode).toBe('multiplayer');
+    expect(report.session.frame.measuredFrames).toBeGreaterThan(0);
+    expect(report.session.rendering.graphics.renderScale).toBe(.5);
+    expect(JSON.stringify(report)).not.toContain(code);
+    expect(JSON.stringify(report)).not.toContain('Canada Pilot');
+    await host.getByRole('button', { name: /Back to pause/ }).click();
+    await host.getByRole('button', { name: 'Enter match', exact: true }).click();
+    await host.keyboard.down('KeyA'); await host.waitForTimeout(500); await host.keyboard.up('KeyA');
+    expect(await host.evaluate(() => window.__BURNHOP_ONLINE__!.snapshot().performance.measuredFrames)).toBeGreaterThan(diagnostics.measuredFrames);
+    await host.keyboard.press('Escape');
+    expect((await fixtureState(host)).fullscreen).toBe(true);
+    expect((await fixtureState(host)).keyboardKeys).toEqual(['Escape']);
+
     const tokenBefore = await guest.evaluate(() => JSON.parse(sessionStorage.getItem('burnhop-online-session-v1')!).token);
+    guest.once('dialog', dialog => dialog.accept());
     await guest.reload();
     await enterFullscreen(guest);
     await expect(guest.getByRole('heading', { name: 'MATCH CONTINUES', exact: true })).toBeVisible({ timeout: 15000 });
@@ -81,6 +114,7 @@ test('private invitations, readiness, match capture, locked joins, refresh and h
     await expect(guest.locator('.online-standings tbody tr')).toHaveCount(2);
     await host.getByRole('button', { name: 'Leave match', exact: true }).click();
     await expect(host.getByTestId('menu-screen')).toBeVisible();
+    expect(await host.evaluate(() => !window.dispatchEvent(new Event('beforeunload', { cancelable: true })))).toBe(false);
     await expect(guest.locator('.online-standings tbody tr')).toHaveCount(1);
     expect(failures).toEqual([]);
   } finally {

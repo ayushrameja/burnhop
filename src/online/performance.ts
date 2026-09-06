@@ -1,3 +1,4 @@
+import { FramePerformance } from '../game/framePerformance';
 /** Bounded, local-only measurements. Snapshot sorting happens only when inspected. */
 class Samples {
   private values: number[] = [];
@@ -17,23 +18,18 @@ class Samples {
 
 export class OnlinePerformance {
   private arrivals = new Samples();
-  private frames = new Samples();
+  private frames = new FramePerformance();
   private lastArrival: number | null = null;
   private corrections = 0;
   private reconciliations = 0;
   private maximumCorrection = 0;
-  private slowFrames = 0;
-  private measuredFrames = 0;
   patch(now: number): void {
     if (this.lastArrival !== null) this.arrivals.add(Math.max(0, now - this.lastArrival));
     this.lastArrival = now;
   }
   resetArrivalClock(): void { this.lastArrival = null; }
-  frame(ms: number): void {
-    if (ms <= 0) return;
-    this.frames.add(ms); this.measuredFrames++;
-    if (ms > 1000 / 30) this.slowFrames++;
-  }
+  get fps(): number | null { return this.frames.fps; }
+  frame(ms: number, workMs = 0): void { this.frames.record(ms, workMs); }
   reconcile(before: { x: number; y: number }, after: { x: number; y: number }): void {
     const distance = Math.hypot(after.x - before.x, after.y - before.y);
     this.reconciliations++;
@@ -44,8 +40,9 @@ export class OnlinePerformance {
   snapshot() {
     const arrival = this.arrivals.snapshot(), frame = this.frames.snapshot();
     return { arrivalSamples: arrival.samples, arrivalIntervalMs: arrival.mean, arrivalJitterMs: arrival.deviation,
-      arrivalP95Ms: arrival.p95, frameSamples: frame.samples, frameP95Ms: frame.p95, frameP99Ms: frame.p99,
-      measuredFrames: this.measuredFrames, slowFrames: this.slowFrames, reconciliations: this.reconciliations,
+      arrivalP95Ms: arrival.p95, fps: frame.fps, frameSamples: frame.samples, frameP95Ms: frame.frameP95Ms, frameP99Ms: frame.frameP99Ms, maxFrameMs: frame.maxFrameMs,
+      measuredFrames: frame.measuredFrames, slowFrames: frame.slowFrames, hitchesOver100Ms: frame.hitchesOver100Ms,
+      frameWindowSeconds: frame.windowSeconds, submissionP95Ms: frame.submissionP95Ms, submissionP99Ms: frame.submissionP99Ms, reconciliations: this.reconciliations,
       corrections: this.corrections, correctionFraction: this.corrections / (this.reconciliations || 1),
       maximumCorrectionWorldUnits: this.maximumCorrection };
   }

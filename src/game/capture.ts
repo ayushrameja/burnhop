@@ -1,5 +1,6 @@
 const CAPTURE_TIMEOUT_MS = 8000;
-type EscapeKeyboard = { lock: (keys: string[]) => Promise<void>; unlock: () => void };
+type CaptureKeyboard = { lock: (keys: string[]) => Promise<void>; unlock: () => void };
+export type KeyboardCaptureStatus = 'idle' | 'pending' | 'active' | 'blocked' | 'unavailable';
 
 /** Owns only this game's fullscreen element and mouse lock, never another page surface. */
 export class GameCapture {
@@ -15,17 +16,22 @@ export class GameCapture {
   private exitingFullscreen: Promise<void> | null = null;
   private keyboardPending: Promise<void> | null = null;
   private keyboardOwned = false;
-  private keyboardAttempted = false;
+  private keyboardAttempted: string | null = null;
+  private keyboardKey: string | null = null;
+  private keyboardEpoch = 0;
+  private keyboardRetryWanted = false;
+  private keyboardStatus: KeyboardCaptureStatus = 'idle';
   private readonly document: Document;
-  private readonly keyboard?: EscapeKeyboard;
+  private readonly keyboard?: CaptureKeyboard;
 
   constructor(
     private canvas: HTMLCanvasElement,
     private screen: HTMLElement,
     private onLost: (reason: 'pointerlock' | 'fullscreen') => void,
+    private onKeyboardStatus: (status: KeyboardCaptureStatus) => void = () => {},
   ) {
     this.document = canvas.ownerDocument;
-    this.keyboard = (this.document.defaultView?.navigator as (Navigator & { keyboard?: EscapeKeyboard }) | undefined)?.keyboard;
+    this.keyboard = (this.document.defaultView?.navigator as (Navigator & { keyboard?: CaptureKeyboard }) | undefined)?.keyboard;
     this.document.addEventListener('pointerlockchange', this.changed);
     this.document.addEventListener('fullscreenchange', this.changed);
     this.document.addEventListener('keydown', this.keyDown);
@@ -64,6 +70,9 @@ export class GameCapture {
     this.hadFullscreen = keepFullscreen;
     this.lossNotified = false;
     const generation = ++this.generation;
+    // Request during the click, before fullscreen consumes transient activation.
+    // Resume is also a fresh retry if an earlier request failed or was revoked.
+    this.lockKeyboard(true);
     // Entering the menu also releases a previous gameplay cursor without leaving fullscreen.
     if (!pointer) void this.releaseUnwanted();
     // Fullscreen consumes transient activation. Pointer lock MUST be requested first,
@@ -90,7 +99,7 @@ export class GameCapture {
     }
     this.active = pointer;
     this.hadFullscreen = true;
-    this.lockEscape();
+    this.lockKeyboard();
   }
 
   isActive(): boolean {
@@ -155,7 +164,7 @@ export class GameCapture {
       }
     } else {
       void this.releaseUnwanted();
-      if (this.wantedFullscreen && fullscreen) this.lockEscape();
+      if (this.wantedFullscreen && fullscreen) this.lockKeyboard();
     }
   };
 
@@ -205,25 +214,68 @@ export class GameCapture {
     });
   }
 
-  private lockEscape(): void {
-    if (typeof this.keyboard?.lock !== 'function' || this.keyboardAttempted || this.keyboardPending) return;
-    this.keyboardAttempted = true;
-    try {
-      // Progressive enhancement: browsers without Keyboard Lock retain their native Escape exit.
-      // https://developer.chrome.com/blog/better-full-screen-mode
-      const pending = this.keyboard.lock(['Escape']).then(() => {
-        this.keyboardOwned = true;
-        if (!this.wantedFullscreen || this.document.fullscreenElement !== this.screen || this.disposed) {
-          this.unlockEscape();
-        }
-      }, () => { /* Permission denial must not prevent fullscreen play. */ });
-      this.keyboardPending = pending;
-      void pending.finally(() => { if (this.keyboardPending === pending) this.keyboardPending = null; });
-    } catch { /* Keyboard Lock is optional, including in embedded browsers. */ }
+  getKeyboardStatus(): KeyboardCaptureStatus { return this.keyboardStatus; }
+
+  /** Optional capture can be retried from the visible notice without restarting the game. */
+  retryKeyboard(): void { if (this.isFullscreen()) this.lockKeyboard(true); }
+
+  private setKeyboardStatus(status: KeyboardCaptureStatus): void {
+    if (this.keyboardStatus === status) return;
+    this.keyboardStatus = status;
+    if (!this.disposed) this.onKeyboardStatus(status);
   }
 
-  private unlockEscape(): void {
-    this.keyboardAttempted = false;
+  private keyboardKeys(): string[] { return this.wantedPointer ? ['Escape', 'KeyW'] : ['Escape']; }
+
+  private lockKeyboard(retry = false): void {
+    if (this.disposed || !this.wantedFullscreen) return;
+    if (typeof this.keyboard?.lock !== 'function') { this.setKeyboardStatus('unavailable'); return; }
+    if (this.keyboardPending) { this.keyboardRetryWanted ||= retry; return; }
+    const keys = this.keyboardKeys(), key = keys.join(',');
+    if (!retry && ((this.keyboardOwned && this.keyboardKey === key) || this.keyboardStatus === 'blocked' || this.keyboardAttempted === key)) return;
+    this.keyboardAttempted = key;
+    const epoch = this.keyboardEpoch;
+    this.setKeyboardStatus('pending');
+    try {
+      // KeyW includes Ctrl+W / Ctrl+Shift+W / Cmd+W. Only capture it during gameplay;
+      // menus keep normal browser shortcuts. Escape remains captured across pause.
+      const pending = this.keyboard.lock(keys).then(() => {
+        if (epoch !== this.keyboardEpoch || !this.wantedFullscreen || this.disposed) {
+          try { this.keyboard?.unlock(); } catch { /* A cancelled grant may already be gone. */ }
+          return;
+        }
+        this.keyboardOwned = true;
+        this.keyboardKey = key;
+        this.setKeyboardStatus('active');
+      }, () => {
+        if (epoch === this.keyboardEpoch && this.wantedFullscreen && !this.disposed) {
+          this.failKeyboard();
+        }
+      });
+      this.keyboardPending = pending;
+      void pending.finally(() => {
+        if (this.keyboardPending !== pending) return;
+        this.keyboardPending = null;
+        const retryWanted = this.keyboardRetryWanted; this.keyboardRetryWanted = false;
+        // A pause, cancellation or re-entry may have changed the required keys in flight.
+        if (retryWanted || epoch !== this.keyboardEpoch || (this.keyboardOwned && key !== this.keyboardKeys().join(','))) this.lockKeyboard(retryWanted);
+      });
+    } catch {
+      this.failKeyboard();
+    }
+  }
+
+  private failKeyboard(): void {
+    // Some implementations may retain the previous key set when an update fails.
+    // In particular, a failed pause update must not leave KeyW captured in menus.
+    try { this.keyboard?.unlock(); } catch { /* The rejected request may already be unlocked. */ }
+    this.keyboardOwned = false; this.keyboardKey = null;
+    this.setKeyboardStatus('blocked');
+  }
+
+  private unlockKeyboard(): void {
+    this.keyboardEpoch++; this.keyboardAttempted = this.keyboardKey = null; this.keyboardRetryWanted = false;
+    if (this.keyboardStatus !== 'blocked' && this.keyboardStatus !== 'unavailable') this.setKeyboardStatus('idle');
     if (!this.keyboardOwned && !this.keyboardPending) return;
     this.keyboardOwned = false;
     try { this.keyboard?.unlock(); } catch { /* The browser may already have unlocked it. */ }
@@ -233,8 +285,10 @@ export class GameCapture {
     if (!this.wantedPointer && this.document.pointerLockElement === this.canvas) {
       try { this.document.exitPointerLock(); } catch { /* It may already have been released by the browser. */ }
     }
-    if (!this.wantedFullscreen || this.document.fullscreenElement !== this.screen) this.unlockEscape();
-    if (this.wantedFullscreen) return;
+    // A keyboard request can precede fullscreen entry. Do not cancel it on an
+    // intermediate pointer-lock event while fullscreen is still being acquired.
+    if (!this.wantedFullscreen) this.unlockKeyboard();
+    if (this.wantedFullscreen) { if (this.keyboardOwned) this.lockKeyboard(); return; }
     if (this.exitingFullscreen) return this.exitingFullscreen;
     if (this.document.fullscreenElement === this.screen) {
       try {

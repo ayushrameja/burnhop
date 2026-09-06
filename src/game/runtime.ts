@@ -8,6 +8,10 @@ import { CONFIG, cloneWorld, createWorld, getWeaponOrigin, releasePlayerInput, s
 import { FixedStepClock } from './timing';
 import { ActionInput } from './input';
 import { normalizeControls, type ControlsSettings } from './controls';
+import { defaultGraphics, normalizeGraphics, FramePacer, type GraphicsSettings } from './graphics';
+import { registerPerformanceReport } from './performanceReport';
+import { FramePerformance } from './framePerformance';
+import { isTabCloseShortcut, protectGameSession } from './leaveGuard';
 import { DEFAULT_ZOOM_LEVEL, nextZoomLevel, type ZoomLevel } from './camera';
 import type { GameAssets } from './assets';
 import { type GameEvent, type HudState, type InputCommand, type Vec2, type WorldState } from './types';
@@ -16,7 +20,7 @@ interface RuntimeCallbacks { onHud: (hud: HudState) => void; onPause: () => void
 export interface RuntimeDiagnostics {
   snapshot: () => WorldState;
   toScreen: (x: number, y: number) => { x: number; y: number };
-  metrics: () => { fps: number | null; frames: number; running: boolean; tick: number };
+  metrics: () => { fps: number | null; frames: number; running: boolean; tick: number; performance: ReturnType<FramePerformance['snapshot']>; rendering: ReturnType<Renderer['getPerformanceDiagnostics']> };
   appearances: () => { player: DetailedAppearance; target: DetailedAppearance };
   camera: () => ReturnType<Renderer['getCameraDiagnostics']>;
   input: () => ReturnType<ActionInput['snapshot']>;
@@ -48,10 +52,16 @@ export class GameRuntime {
   private debug = false;
   private reducedMotion = false;
   private resizeObserver: ResizeObserver;
-  private frameSamples: { time: number; duration: number }[] = [];
+  private performance = new FramePerformance();
+  private graphics = defaultGraphics();
+  private pacer = new FramePacer();
+  private renderEvents: GameEvent[] = [];
+  private lastDrawTime = 0;
   private fps: number | null = null;
   private lastPerformanceTime = 0;
   private frames = 0;
+  private unregisterReport: () => void;
+  private removeLeaveGuard: () => void;
   private diagnostic: RuntimeDiagnostics;
 
   constructor(private canvas: HTMLCanvasElement, private assets: GameAssets, private callbacks: RuntimeCallbacks) {
@@ -81,14 +91,16 @@ export class GameRuntime {
     this.diagnostic = {
       snapshot: () => cloneWorld(this.world),
       toScreen: (x, y) => this.renderer.worldToScreen(x, y),
-      metrics: () => ({ fps: this.fps, frames: this.frames, running: !this.paused && !this.disposed, tick: this.world.tick }),
+      metrics: () => ({ fps: this.fps, frames: this.frames, running: !this.paused && !this.disposed, tick: this.world.tick, performance: this.performance.snapshot(), rendering: this.renderer.getPerformanceDiagnostics() }),
       appearances: () => ({ player: { ...this.appearance }, target: { ...BOT_APPEARANCE } }),
       camera: () => this.renderer.getCameraDiagnostics(),
       input: () => this.input.snapshot(),
       aim: () => ({ mode: this.aimMode, firing: this.firing, angle: this.world.player.aimAngle, visualAngle: this.renderer.getRenderedAimAngle(),
         pointer: { ...this.pointer }, locked: document.pointerLockElement === this.canvas, reticle: this.renderer.getAimDiagnostics() }),
     };
-    if (import.meta.env.DEV) window.__BURNHOP__ = this.diagnostic;
+    this.unregisterReport = registerPerformanceReport(() => ({ mode: 'practice', running: !this.paused && !this.disposed, frame: this.performance.snapshot(), rendering: this.renderer.getPerformanceDiagnostics() }));
+    this.removeLeaveGuard = protectGameSession(window, () => !this.disposed, () => { this.pause(); this.callbacks.onPause(); });
+    if (import.meta.env.DEV || new URLSearchParams(location.search).has('diagnostics')) window.__BURNHOP__ = this.diagnostic;
     this.pointer = this.renderer.worldToScreen(this.world.target.x + this.world.target.width / 2, this.world.target.y + this.world.target.height / 2);
     this.renderer.setPointer(this.pointer.x, this.pointer.y);
     this.draw([], 0, 1);
@@ -105,6 +117,7 @@ export class GameRuntime {
     this.raf = 0;
     this.clearInput();
     this.clock.reset();
+    this.renderEvents.length = 0; this.pacer.reset();
     releasePlayerInput(this.world);
     this.audio.pause();
     this.resetPerformance();
@@ -114,7 +127,7 @@ export class GameRuntime {
     if (this.disposed || !this.paused) return;
     this.clearInput();
     this.paused = false;
-    this.lastTime = performance.now();
+    this.lastTime = performance.now(); this.lastDrawTime = this.lastTime; this.pacer.reset();
     this.lastHudTime = 0;
     this.resetPerformance();
     void this.audio.unlock();
@@ -127,13 +140,15 @@ export class GameRuntime {
     this.previous = cloneWorld(this.world);
     this.clearInput();
     this.clock.reset();
+    this.renderEvents.length = 0; this.pacer.reset();
     this.latestAimAngle = this.world.player.aimAngle;
-    this.lastTime = performance.now();
+    this.lastTime = performance.now(); this.lastDrawTime = this.lastTime; this.pacer.reset();
     this.resetPerformance();
     // Reset disposable camera/effects while keeping the session's selected view preset.
     this.renderer.destroy();
     this.renderer = new Renderer(this.canvas, this.assets);
     this.renderer.setZoom(this.zoomLevel);
+    this.renderer.setGraphics(this.graphics);
     this.callbacks.onZoom?.(this.zoomLevel);
     // Establish the new spawn camera before projecting its initial pointer.
     this.draw([], 0, 1);
@@ -148,6 +163,10 @@ export class GameRuntime {
   setMuted(muted: boolean): void { this.audio.setMuted(muted); }
   setAudioVolumes(volumes: AudioSettings): void { this.audio.setVolumes(volumes); }
   setReducedMotion(value: boolean): void { this.reducedMotion = value; }
+  setGraphics(value: GraphicsSettings): void {
+    this.graphics = normalizeGraphics(value); this.renderer.setGraphics(this.graphics);
+    if (this.paused) this.draw([], 0, 1);
+  }
   setControls(value: ControlsSettings): void {
     const controls = normalizeControls(value), key = JSON.stringify(controls);
     if (key === this.controlsKey) return;
@@ -182,7 +201,7 @@ export class GameRuntime {
       return;
     }
     if (event.target instanceof Element && event.target.closest('button, input, select, textarea, [contenteditable="true"]')) return;
-    if (this.input.isBound(event.code) || (event.code === 'F3' && import.meta.env.DEV)) event.preventDefault();
+    if (this.input.isBound(event.code) || isTabCloseShortcut(event) || (event.code === 'F3' && import.meta.env.DEV)) event.preventDefault();
     if (event.repeat) return;
     if (event.code === 'F3' && import.meta.env.DEV) { this.debug = !this.debug; return; }
     this.pressInput(event.code);
@@ -242,9 +261,8 @@ export class GameRuntime {
     if (this.paused || this.disposed) return;
     const elapsed = Math.max(0, time - this.lastTime);
     this.lastTime = time;
-    this.recordFrame(time, elapsed);
-    this.frames++;
-    const events: GameEvent[] = [];
+    const events = this.renderEvents;
+    let hadEvents = false;
     const alpha = this.clock.advance(elapsed / 1000, () => {
       this.previous = cloneWorld(this.world);
       const player = this.world.player;
@@ -262,9 +280,17 @@ export class GameRuntime {
       this.audio.updateReload(getReloadProgress(this.world.player.weapon.reloadTicks, CONFIG.reloadTicks));
       this.audio.setThrust(this.world.player.thrusting);
       events.push(...tickEvents);
+      hadEvents ||= tickEvents.length > 0;
     });
-    this.draw(events, Math.min(elapsed / 1000, 0.1), alpha);
-    if (time - this.lastHudTime >= 50 || events.length) { this.publishHud(); this.lastHudTime = time; }
+    if (this.pacer.shouldDraw(time, this.graphics.frameRate)) {
+      const interval = time - this.lastDrawTime; this.lastDrawTime = time;
+      const started = performance.now();
+      this.draw(events, Math.min(interval / 1000, .1), alpha);
+      this.performance.record(interval, performance.now() - started);
+      events.length = 0; this.frames++;
+      this.recordFrame(time);
+    }
+    if (time - this.lastHudTime >= 50 || hadEvents) { this.publishHud(); this.lastHudTime = time; }
     this.raf = requestAnimationFrame(this.frame);
   };
   private draw(events: GameEvent[], dt: number, alpha: number): void {
@@ -273,25 +299,14 @@ export class GameRuntime {
     this.latestAimAngle = this.renderer.getRenderedAimAngle();
   }
   private resetPerformance(): void {
-    this.frameSamples = [];
     this.fps = null;
     this.lastPerformanceTime = performance.now();
     this.callbacks.onPerformance?.(null);
   }
-  private recordFrame(time: number, elapsed: number): void {
-    if (elapsed > 0) this.frameSamples.push({ time, duration: elapsed });
-    const windowStart = time - 500;
-    this.frameSamples = this.frameSamples.filter(sample => sample.time > windowStart);
-    let duration = 0, frames = 0;
-    for (const sample of this.frameSamples) {
-      const overlap = Math.min(sample.duration, sample.time - windowStart);
-      duration += overlap;
-      frames += overlap / sample.duration;
-    }
-    this.fps = duration > 0 ? frames * 1000 / duration : null;
+  private recordFrame(time: number): void {
+    this.fps = this.performance.fps;
     if (time - this.lastPerformanceTime >= 250) {
-      this.callbacks.onPerformance?.(this.fps);
-      this.lastPerformanceTime = time;
+      this.callbacks.onPerformance?.(this.fps); this.lastPerformanceTime = time;
     }
   }
   private publishHud(): void {
@@ -302,6 +317,8 @@ export class GameRuntime {
   }
   destroy(): void {
     if (this.disposed) return;
+    this.unregisterReport();
+    this.removeLeaveGuard();
     this.pause();
     this.disposed = true;
     this.resizeObserver.disconnect();

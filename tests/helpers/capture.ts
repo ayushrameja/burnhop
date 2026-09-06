@@ -3,6 +3,7 @@ import { expect, type Page } from '@playwright/test';
 export interface CaptureFixtureState {
   calls: string[];
   keyboard: boolean;
+  keyboardKeys: string[];
   fullscreen: boolean;
   locked: boolean;
   sameCanvas: boolean;
@@ -15,6 +16,7 @@ export async function installCapture(page: Page) {
     let fullscreen: Element | null = null;
     let pointer: Element | null = null;
     let keyboard = false;
+    let keyboardKeys: string[] = [];
     let firstCanvas: Element | null = null;
     const calls: string[] = [];
     Object.defineProperties(document, {
@@ -50,8 +52,8 @@ export async function installCapture(page: Page) {
     Object.defineProperty(navigator, 'keyboard', {
       configurable: true,
       value: {
-        lock: async (keys: string[]) => { calls.push(`keyboard:${keys.join(',')}`); keyboard = true; },
-        unlock: () => { calls.push('exit-keyboard'); keyboard = false; },
+        lock: async (keys: string[]) => { calls.push(`keyboard:${keys.join(',')}`); keyboard = true; keyboardKeys = [...keys]; },
+        unlock: () => { calls.push('exit-keyboard'); keyboard = false; keyboardKeys = []; },
       },
     });
     const fetchResource = window.fetch;
@@ -60,7 +62,7 @@ export async function installCapture(page: Page) {
       return fetchResource(...args);
     };
     (window as Window & { __CAPTURE_FIXTURE__?: () => unknown }).__CAPTURE_FIXTURE__ = () => ({
-      calls: [...calls], keyboard,
+      calls: [...calls], keyboard, keyboardKeys: [...keyboardKeys],
       fullscreen: fullscreen === document.querySelector('.game-shell'),
       locked: pointer === document.querySelector('[data-testid="game-canvas"]'),
       sameCanvas: firstCanvas === document.querySelector('[data-testid="game-canvas"]'),

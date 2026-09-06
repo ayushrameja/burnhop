@@ -6,6 +6,7 @@ import type { AudioSettings } from '../game/audioSettings';
 import type { DetailedAppearance } from '../game/appearance';
 import { DEFAULT_ZOOM_LEVEL, nextZoomLevel, type ZoomLevel } from '../game/camera';
 import { normalizeControls, type ControlsSettings } from '../game/controls';
+import { defaultGraphics, normalizeGraphics, FramePacer, type GraphicsSettings } from '../game/graphics';
 import { ActionInput } from '../game/input';
 import { Renderer, type OnlineRenderActor } from '../game/renderer';
 import { getReloadProgress } from '../game/reload';
@@ -14,15 +15,18 @@ import type { HudState, Vec2 } from '../game/types';
 import { MATCH_CONFIG, neutralInput, type ActorEvent, type MatchPlayer, type MatchPhase, type NetworkInput } from '../multiplayer/model';
 import { InputWire, MatchWire, PlayerWire, playerFromWire, syncPlayerWire } from '../multiplayer/wire';
 import { OnlineConnection } from './connection';
+import { registerPerformanceReport } from '../game/performanceReport';
+import { isTabCloseShortcut, protectGameSession } from '../game/leaveGuard';
 import { OnlineEffects } from './effects';
 import { stepWireActor } from './prediction';
 
 interface RuntimeCallbacks { onHud: (hud: HudState) => void; onPause: () => void; onPerformance?: (fps: number | null) => void; onZoom?: (zoom: ZoomLevel) => void }
+const EMPTY_EVENTS: ActorEvent[] = [];
 const REMOTE_FIELDS = ['x', 'y', 'height', 'crouchAmount', 'vx', 'vy'] as const;
 export interface OnlineDiagnostics {
   snapshot: () => { status: ReturnType<OnlineConnection['getSnapshot']>['status']; phase: MatchPhase; running: boolean; paused: boolean;
     local: MatchPlayer | null; authority: MatchPlayer | null; actors: MatchPlayer[]; pending: number; awaitingResync: boolean; replayBufferSize: number;
-    performance: ReturnType<OnlineConnection['performance']['snapshot']>;
+    performance: ReturnType<OnlineConnection['performance']['snapshot']>; rendering: ReturnType<Renderer['getPerformanceDiagnostics']>;
     correction: Vec2; aim: { angle: number; mode: AimMode; pointer: Vec2; locked: boolean } };
   toScreen: (x: number, y: number) => Vec2;
 }
@@ -46,12 +50,19 @@ export class OnlineRuntime {
   private phase: MatchPhase = 'lobby';
   private effects = new OnlineEffects();
   private pendingEvents: ActorEvent[] = [];
+  private renderEvents: ActorEvent[] = [];
+  private actorViews = new Map<string, OnlineRenderActor & { player: MatchPlayer }>();
+  private actors: OnlineRenderActor[] = [];
+  private actorIds = new Set<string>();
+  private actorEvents = new Map<string, ActorEvent[]>();
+  private graphics = defaultGraphics();
+  private pacer = new FramePacer();
+  private lastDrawTime = 0;
   private paused = true;
   private disposed = false;
   private running = false;
   private raf = 0;
   private warmTimer: ReturnType<typeof setTimeout> | undefined;
-  private lastTime = 0;
   private lastHudTime = 0;
   private lastPerformanceTime = 0;
   private fps: number | null = null;
@@ -63,6 +74,8 @@ export class OnlineRuntime {
   private resizeObserver: ResizeObserver;
   private unsubscribers: Array<() => void>;
   private mouseGestures = new Set<number>();
+  private unregisterReport: () => void;
+  private removeLeaveGuard: () => void;
   private diagnostic: OnlineDiagnostics;
   private beforeReconcile: { x: number; y: number; epoch: number } | null = null;
 
@@ -85,14 +98,16 @@ export class OnlineRuntime {
         const local = this.controller ? playerFromWire(this.controller.state) : null;
         const authority = this.localWire ? playerFromWire(this.localWire) : null;
         return { status: this.connection.getSnapshot().status, phase: this.phase, running: this.running, paused: this.paused,
-          local, authority, actors: this.activeRoom?.state?.players ? [...this.activeRoom.state.players.values()].map(playerFromWire) : [],
+          local, authority, actors: this.activeRoom?.state?.players ? [...this.activeRoom.state.players.values()].map(wire => playerFromWire(wire)) : [],
           pending: this.handle?.pendingCount ?? 0, awaitingResync: this.awaitingResync, replayBufferSize: this.handle?.replayBufferSize ?? 0,
-          performance: this.connection.performance.snapshot(),
+          performance: this.connection.performance.snapshot(), rendering: this.renderer.getPerformanceDiagnostics(),
           correction: { x: local && authority ? local.x - authority.x : 0, y: local && authority ? local.y - authority.y : 0 },
           aim: { angle: this.aimAngle, mode: this.input.aimMode, pointer: { ...this.pointer }, locked: document.pointerLockElement === this.canvas } };
       },
       toScreen: (x, y) => this.renderer.worldToScreen(x, y),
     };
+    this.unregisterReport = registerPerformanceReport(() => ({ mode: 'multiplayer', running: !this.paused && !this.disposed, players: this.activeRoom?.state.players.size ?? 0, frame: this.connection.performance.snapshot(), rendering: this.renderer.getPerformanceDiagnostics() }));
+    this.removeLeaveGuard = protectGameSession(window, () => !this.disposed && this.phase === 'playing', () => { this.pause(); this.callbacks.onPause(); });
     if (import.meta.env.DEV || new URLSearchParams(location.search).has('diagnostics')) window.__BURNHOP_ONLINE__ = this.diagnostic;
     const bounds = this.renderer.getPointerBounds();
     this.pointer = { x: bounds.left + (bounds.right - bounds.left) * 0.65, y: (bounds.top + bounds.bottom) / 2 };
@@ -119,7 +134,7 @@ export class OnlineRuntime {
   }
   start(): void {
     if (this.running || this.disposed) return;
-    this.running = true; this.lastTime = performance.now();
+    this.running = true; this.lastDrawTime = performance.now(); this.pacer.reset();
     this.raf = requestAnimationFrame(this.frame);
   }
   pause(): void {
@@ -135,12 +150,15 @@ export class OnlineRuntime {
   resume(): void {
     if (this.disposed || this.connection.getSnapshot().status !== 'connected'
       || this.connection.getSnapshot().phase !== 'playing' || document.pointerLockElement !== this.canvas) return;
-    this.input.clear(); this.paused = false; this.start(); void this.audio.unlock();
+    this.input.clear(); this.paused = false; this.lastDrawTime = performance.now(); this.pacer.reset(); this.start(); void this.audio.unlock();
   }
   setAppearance(_appearance: DetailedAppearance): void { /* Equipped appearance is frozen by the room admission. */ }
   setMuted(muted: boolean): void { this.audio.setMuted(muted); }
   setAudioVolumes(volumes: AudioSettings): void { this.audio.setVolumes(volumes); }
   setReducedMotion(value: boolean): void { this.reducedMotion = value; }
+  setGraphics(value: GraphicsSettings): void {
+    this.graphics = normalizeGraphics(value); this.renderer.setGraphics(this.graphics);
+  }
   setControls(value: ControlsSettings): void {
     const controls = normalizeControls(value), key = JSON.stringify(controls);
     if (key === this.controlsKey) return;
@@ -150,7 +168,7 @@ export class OnlineRuntime {
     this.awaitingResync = false;
     this.input.clear(); this.controller?.reset();
     if (player && this.controller) syncPlayerWire(this.controller.state, player);
-    this.pendingEvents = []; this.effects.reset(); this.audio.pause();
+    this.pendingEvents = []; this.renderEvents.length = 0; this.effects.reset(); this.audio.pause();
     if (this.connection.getSnapshot().status !== 'connected') {
       this.pause(); this.callbacks.onPause();
     } else if (!this.paused) void this.audio.unlock();
@@ -189,7 +207,7 @@ export class OnlineRuntime {
     }
     if (this.localLife !== me.lifeId || (this.localHealth > 0 && me.health <= 0) || this.phase !== room.state.phase) {
       if (this.localLife !== me.lifeId || this.phase !== room.state.phase) this.renderer.resetOnlinePresentation();
-      this.localLife = me.lifeId; this.input.clear(); this.controller!.reset(); this.pendingEvents = []; this.effects.reset();
+      this.localLife = me.lifeId; this.input.clear(); this.controller!.reset(); this.pendingEvents = []; this.renderEvents.length = 0; this.effects.reset();
       this.audio.pause(); if (!this.paused) void this.audio.unlock();
     }
     this.localHealth = me.health; this.phase = room.state.phase;
@@ -231,7 +249,6 @@ export class OnlineRuntime {
   }
   private frame = (time: number): void => {
     if (this.disposed || !this.running) return;
-    const elapsed = Math.max(0, time - this.lastTime); this.lastTime = time;
     try {
       if (this.ensurePrediction()) {
         const connected = this.connection.getSnapshot().status === 'connected';
@@ -240,33 +257,59 @@ export class OnlineRuntime {
         const steps = this.predict!.tick(time);
         this.beforeReconcile = null;
         if (connected && !this.awaitingResync) for (let i = 0; i < steps; i++) this.stageInput();
-        const actors: OnlineRenderActor[] = [];
+        const actors = this.actors; actors.length = 0; this.actorIds.clear();
         for (const [id, wire] of this.activeRoom!.state.players) {
           const local = id === this.activeRoom!.sessionId;
-          const actor = playerFromWire(local && this.controller ? this.controller.state : wire);
+          let view = this.actorViews.get(id);
+          const actor = playerFromWire(local && this.controller ? this.controller.state : wire, view?.player);
+          this.actorIds.add(id);
           // Health/lives/respawn stay authoritative, even while movement is predicted.
           actor.health = wire.health; actor.lifeId = wire.lifeId; actor.protectionTicks = wire.protectionTicks;
           for (const field of REMOTE_FIELDS) actor[field] = this.predict!.value(wire, field);
           actor.aimAngle = local ? actor.aimAngle : this.predict!.value(wire, 'aimAngle');
-          actors.push({ player: actor, appearance: actor.appearance, nickname: actor.nickname,
-            connected: wire.connected, protected: wire.protectionTicks > 0, lifeId: wire.lifeId });
+          if (!view) {
+            view = { player: actor, appearance: actor.appearance, nickname: actor.nickname,
+              connected: wire.connected, protected: wire.protectionTicks > 0, lifeId: wire.lifeId };
+            this.actorViews.set(id, view);
+          } else {
+            view.appearance = actor.appearance; view.nickname = actor.nickname;
+            view.connected = wire.connected; view.protected = wire.protectionTicks > 0; view.lifeId = wire.lifeId;
+          }
+          actors.push(view);
         }
+        for (const id of this.actorViews.keys()) if (!this.actorIds.has(id)) { this.actorViews.delete(id); this.actorEvents.delete(id); }
         const local = actors.find(actor => actor.player.id === this.activeRoom!.sessionId);
-        const events = this.pendingEvents.splice(0).filter(event => {
+        const events = this.pendingEvents;
+        let eventCount = 0;
+        for (const event of events) {
           const source = this.activeRoom!.state.players.get(event.actorId);
           const target = event.targetId ? this.activeRoom!.state.players.get(event.targetId) : undefined;
-          return (!source || event.lifeId >= source.lifeId)
-            && (!target || event.targetLifeId === undefined || event.targetLifeId >= target.lifeId);
-        });
+          if ((!source || event.lifeId >= source.lifeId)
+            && (!target || event.targetLifeId === undefined || event.targetLifeId >= target.lifeId)) events[eventCount++] = event;
+        }
+        events.length = eventCount;
         if (local) {
+          for (const bucket of this.actorEvents.values()) bucket.length = 0;
+          for (const event of events) {
+            let bucket = this.actorEvents.get(event.actorId);
+            if (!bucket) { bucket = []; this.actorEvents.set(event.actorId, bucket); }
+            bucket.push(event);
+          }
           for (const actor of actors) this.audio.updateActor(actor.player.id, actor.player,
             getReloadProgress(actor.player.weapon.reloadTicks, CONFIG.reloadTicks), actor.player.health > 0 && actor.player.thrusting,
-            events.filter(event => event.actorId === actor.player.id), local.player, actor === local);
-          this.audio.retainActors(new Set(actors.map(actor => actor.player.id)));
-          this.renderer.renderOnline(actors, local.player.id, this.activeRoom!.state.tick, events,
-            Math.min(elapsed / 1000, 0.1), this.reducedMotion, this.input.aimMode,
-            this.paused ? undefined : { pointer: this.pointer, previousAngle: this.aimAngle });
-          if (!this.paused) this.aimAngle = this.renderer.getRenderedAimAngle();
+            this.actorEvents.get(actor.player.id) ?? EMPTY_EVENTS, local.player, actor === local);
+          this.audio.retainActors(this.actorIds);
+          this.renderEvents.push(...events); events.length = 0;
+          if (this.pacer.shouldDraw(time, this.graphics.frameRate)) {
+            const interval = time - this.lastDrawTime; this.lastDrawTime = time;
+            const started = performance.now();
+            this.renderer.renderOnline(actors, local.player.id, this.activeRoom!.state.tick, this.renderEvents,
+              Math.min(interval / 1000, .1), this.reducedMotion, this.input.aimMode,
+              this.paused ? undefined : { pointer: this.pointer, previousAngle: this.aimAngle });
+            this.renderEvents.length = 0;
+            if (!this.paused && !document.hidden) this.connection.performance.frame(interval, performance.now() - started);
+            if (!this.paused) this.aimAngle = this.renderer.getRenderedAimAngle();
+          }
           if (time - this.lastHudTime > 50) {
             const p = local.player;
             this.callbacks.onHud({ health: p.health, fuel: p.fuel, ammo: p.weapon.ammo,
@@ -280,8 +323,7 @@ export class OnlineRuntime {
       this.connection.reportError(error instanceof Error ? error.message : 'Online simulation could not start.');
       this.pause(); this.callbacks.onPause(); this.running = false; return;
     }
-    if (!this.paused && !document.hidden) this.connection.performance.frame(elapsed);
-    if (elapsed > 0) this.fps = this.fps === null ? 1000 / elapsed : this.fps * 0.92 + (1000 / elapsed) * 0.08;
+    this.fps = this.connection.performance.fps;
     if (time - this.lastPerformanceTime > 250) { this.callbacks.onPerformance?.(this.fps); this.lastPerformanceTime = time; }
     this.raf = requestAnimationFrame(this.frame);
   };
@@ -302,7 +344,7 @@ export class OnlineRuntime {
     if (this.paused || this.disposed || event.defaultPrevented) return;
     if (event.code === 'Escape') { event.preventDefault(); this.pause(); this.callbacks.onPause(); return; }
     if (event.target instanceof Element && event.target.closest('button,input,select,textarea,[contenteditable="true"]')) return;
-    if (this.input.isBound(event.code)) event.preventDefault();
+    if (this.input.isBound(event.code) || isTabCloseShortcut(event)) event.preventDefault();
     if (!event.repeat) this.press(event.code);
   };
   private keyUp = (event: KeyboardEvent): void => { this.input.release(event.code); this.refreshAim(); };
@@ -336,6 +378,8 @@ export class OnlineRuntime {
   };
   destroy(): void {
     if (this.disposed) return;
+    this.unregisterReport();
+    this.removeLeaveGuard();
     this.pause(); this.disposed = true; this.running = false; cancelAnimationFrame(this.raf); clearTimeout(this.warmTimer);
     this.predict?.dispose(); this.resizeObserver.disconnect(); for (const off of this.unsubscribers) off();
     window.removeEventListener('keydown', this.keyDown); window.removeEventListener('keyup', this.keyUp);

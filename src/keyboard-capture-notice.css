@@ -1,0 +1,5 @@
+.keyboard-capture-notice { padding: 12px 14px; margin: 12px 0; max-width: 520px; border: 1px solid #dfbb775c; background: #202822; color: #eee6d1; text-align: left; font: 12px/1.5 'Barlow', sans-serif; }
+.keyboard-capture-notice p { margin: 0; }
+.keyboard-capture-notice p + p { margin-top: 6px; }
+.keyboard-capture-notice button { margin-top: 8px; color: #f5d08f; }
+.keyboard-capture-notice button:focus-visible { outline: 2px solid #f5d08f; outline-offset: 3px; }

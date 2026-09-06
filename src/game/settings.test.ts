@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { defaultGraphics } from './graphics';
 import { defaultControls } from './controls';
 import { defaultAudioSettings, normalizeAudioSettings } from './audioSettings';
 import {
@@ -132,7 +133,7 @@ describe('typed appearance catalog', () => {
 describe('versioned settings and migration', () => {
   it('creates independent default appearances and follows the system motion preference until saved', () => {
     const a = readSettings(true, new MemoryStorage()), b = readSettings(false, new MemoryStorage());
-    expect(a).toEqual({ version: 3, appearance: DEFAULT_APPEARANCE, savedLooks: [], muted: false, reducedMotion: true, controls: defaultControls(), audio: defaultAudioSettings() });
+    expect(a).toEqual({ version: 3, appearance: DEFAULT_APPEARANCE, savedLooks: [], muted: false, reducedMotion: true, controls: defaultControls(), audio: defaultAudioSettings(), graphics: defaultGraphics() });
     expect(b.reducedMotion).toBe(false);
     a.appearance.build = 'slim';
     expect(b.appearance.build).toBe('standard');

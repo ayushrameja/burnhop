@@ -1,10 +1,12 @@
+import { retainHud } from './game/hud';
 import { useCallback, useEffect, useRef, useState, type RefObject, type Dispatch, type SetStateAction } from 'react';
 import CombatHud from './CombatHud';
 import SettingsScreen from './SettingsScreen';
+import KeyboardCaptureNotice from './KeyboardCaptureNotice';
 import { drawDetailedCharacter } from './game/detailedCharacter';
 import type { DetailedAppearance } from './game/appearance';
 import type { GameAssets } from './game/assets';
-import type { GameCapture } from './game/capture';
+import type { GameCapture, KeyboardCaptureStatus } from './game/capture';
 import { loadGame } from './game/loading';
 import type { Settings } from './game/settings';
 import type { HudState } from './game/types';
@@ -23,6 +25,8 @@ interface Props {
   storageAvailable: boolean;
   onBack: () => void;
   onActiveChange: (active: boolean) => void;
+  keyboardStatus: KeyboardCaptureStatus;
+  onRetryKeyboard: () => void;
 }
 const EMPTY_HUD: HudState = { health: 100, fuel: 100, ammo: 30, reloadProgress: -1, shotsFired: 0, hits: 0, kills: 0, targetHealth: 100 };
 function savedNickname() {
@@ -43,7 +47,7 @@ function clock(ticks: number) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
-export default function MultiplayerScreen({ canvasRef, captureRef, pauseRef, active, settings, onChangeSettings, storageAvailable, onBack, onActiveChange }: Props) {
+export default function MultiplayerScreen({ canvasRef, captureRef, pauseRef, active, settings, onChangeSettings, storageAvailable, onBack, onActiveChange, keyboardStatus, onRetryKeyboard }: Props) {
   const [connection] = useState(() => new OnlineConnection({}));
   const [snapshot, setSnapshot] = useState(() => connection.getSnapshot());
   const [assets, setAssets] = useState<GameAssets | null>(null);
@@ -113,13 +117,14 @@ export default function MultiplayerScreen({ canvasRef, captureRef, pauseRef, act
   }, [active, onActiveChange]);
   useEffect(() => {
     if (!assets || !snapshot.sessionId || !canvasRef.current) return;
-    const runtime = new OnlineRuntime(canvasRef.current, assets, connection, { onHud: setHud, onPause: pause, onPerformance: setFps });
+    const runtime = new OnlineRuntime(canvasRef.current, assets, connection, { onHud: next => setHud(previous => retainHud(previous, next)), onPause: pause, onPerformance: setFps });
     runtimeRef.current = runtime;
     const current = settingsRef.current;
     runtime.setAppearance(current.appearance);
     runtime.setMuted(current.muted);
     runtime.setAudioVolumes(current.audio);
     runtime.setReducedMotion(current.reducedMotion);
+    runtime.setGraphics(current.graphics);
     runtime.setControls(current.controls);
     runtime.start();
     setRuntimeReady(true);
@@ -131,6 +136,7 @@ export default function MultiplayerScreen({ canvasRef, captureRef, pauseRef, act
     runtime?.setMuted(settings.muted);
     runtime?.setAudioVolumes(settings.audio);
     runtime?.setReducedMotion(settings.reducedMotion);
+    runtime?.setGraphics(settings.graphics);
     runtime?.setControls(settings.controls);
   }, [settings]);
   useEffect(() => {
@@ -211,6 +217,7 @@ export default function MultiplayerScreen({ canvasRef, captureRef, pauseRef, act
       {showSettings ? <SettingsScreen embedded active={active} settings={settings} onChange={onChangeSettings} storageAvailable={storageAvailable} onClose={() => setShowSettings(false)} /> : <section className="online-panel online-match-menu" role="dialog" aria-modal="true" aria-labelledby="online-pause-title">
         <p className="eyebrow">OUTPOST · {clock(snapshot.remainingTicks)} REMAINING</p>
         <h1 id="online-pause-title">{snapshot.status === 'reconnecting' ? 'RECONNECTING' : 'MATCH CONTINUES'}</h1>
+        <KeyboardCaptureNotice status={keyboardStatus} onRetry={onRetryKeyboard} />
         <p>{snapshot.status === 'reconnecting' ? 'Your slot is reserved for 30 seconds. Reconnecting automatically…' : 'You are still in the match while this menu is open.'}</p>
         {error && <p className="capture-error" role="alert">{error}</p>}
         <table className="online-standings"><thead><tr><th>Pilot</th><th>Kills</th><th>Deaths</th></tr></thead><tbody>{standings.map(player => <tr key={player.id} data-self={player.id === snapshot.sessionId}><td>{player.nickname}{!player.connected && <small> Reconnecting</small>}</td><td>{player.kills}</td><td>{player.deaths}</td></tr>)}</tbody></table>
@@ -225,6 +232,7 @@ export default function MultiplayerScreen({ canvasRef, captureRef, pauseRef, act
   return <main className="online-screen" data-testid="multiplayer-screen">
     <header className="online-header"><button className="text-button" onClick={joined ? leave : onBack} disabled={working}>← {joined ? 'Leave room' : 'Main menu'}</button><span>BURNHOP <i>/</i> MULTIPLAYER</span><span>FRANKFURT</span></header>
     <div className="online-content">
+      <KeyboardCaptureNotice status={keyboardStatus} onRetry={onRetryKeyboard} />
       <div className="online-heading"><p className="eyebrow">{results ? 'MATCH COMPLETE' : joined ? 'PRIVATE ROOM' : 'YOUR FRIENDS. ONE OUTPOST.'}</p><h1>{results ? (snapshot.winnerIds.length > 1 ? 'DRAW' : 'MATCH RESULTS') : joined ? 'OUTPOST' : 'SQUAD UP.\nSPLIT UP.'}</h1><p>{results ? (winnerNames.length ? `${winnerNames.join(' & ')} ${winnerNames.length > 1 ? 'share the win.' : 'wins.'}` : 'Match complete.') : 'Free-for-all · 2–8 pilots · 5 minutes'}</p></div>
       {error && <p className="capture-error" role="alert">{error}</p>}
       {recovering && <p role="status">Checking your previous session…</p>}

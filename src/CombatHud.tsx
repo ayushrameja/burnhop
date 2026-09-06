@@ -4,16 +4,14 @@ import './CombatHud.css';
 const MAGAZINE_CAPACITY = 30;
 const percentage = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
 
-function FuelGauge({ fuel }: { fuel: number }) {
-  const segments = 12;
+const FUEL_SEGMENTS = Array.from({ length: 12 }, (_, index) => {
   const point = (angle: number) => ({ x: 40 + Math.cos(angle) * 31, y: 40 + Math.sin(angle) * 31 });
+  const from = point((138 + index * 22) * Math.PI / 180), to = point((155 + index * 22) * Math.PI / 180);
+  return `M${from.x} ${from.y} A31 31 0 0 1 ${to.x} ${to.y}`;
+});
+function FuelGauge({ fuel }: { fuel: number }) {
   return <svg className="pilot-fuel-gauge" aria-hidden="true" viewBox="0 0 80 80" fill="none">
-    {Array.from({ length: segments }, (_, index) => {
-      const from = point((138 + index * 22) * Math.PI / 180);
-      const to = point((155 + index * 22) * Math.PI / 180);
-      return <path key={index} className="pilot-fuel-segment" data-filled={fuel > index * 100 / segments}
-        d={`M${from.x} ${from.y} A31 31 0 0 1 ${to.x} ${to.y}`} />;
-    })}
+    {FUEL_SEGMENTS.map((path, index) => <path key={index} className="pilot-fuel-segment" data-filled={fuel > index * 100 / 12} d={path} />)}
     <path className="pilot-jetpack" d="M29 26h8v23h-8zm14 0h8v23h-8zM37 30h6v15h-6zM31 21h4v5h-4zm14 0h4v5h-4z" />
     <path d="m30 53 3 8 3-8m8 0 3 8 3-8" stroke="currentColor" strokeWidth="2.2" strokeLinejoin="round" />
   </svg>;

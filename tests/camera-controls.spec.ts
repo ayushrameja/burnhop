@@ -178,6 +178,7 @@ async function expectVisualAim(page: Page, mode: 'radial' | 'pointer') {
       viewportScale: Math.min(rect.width / 1280, rect.height / 720),
       worldScale: api.camera().scale,
       canvasWidth: canvas.width,
+      renderScale: api.metrics().rendering.graphics.renderScale,
       cssWidth: rect.width,
     };
   });
@@ -186,7 +187,7 @@ async function expectVisualAim(page: Page, mode: 'radial' | 'pointer') {
   expect(frame.aim.firing).toBe(true);
   expect(frame.aim.visualAngle).toBeCloseTo(Math.atan2(frame.aim.pointer.y - frame.pivot.y, frame.aim.pointer.x - frame.pivot.x), 9);
   expect(frame.projectedUnit).toBeCloseTo(frame.worldScale * frame.viewportScale, 9);
-  expect(frame.canvasWidth).toBe(Math.round(frame.cssWidth * 2));
+  expect(frame.canvasWidth).toBe(Math.round(frame.cssWidth * 2 * frame.renderScale));
   if (mode === 'pointer') {
     expect(frame.end.x).toBeCloseTo(frame.aim.pointer.x, 9);
     expect(frame.end.y).toBeCloseTo(frame.aim.pointer.y, 9);

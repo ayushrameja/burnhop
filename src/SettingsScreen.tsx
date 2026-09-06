@@ -5,9 +5,11 @@ import {
 } from './game/controls';
 import type { Settings } from './game/settings';
 import { defaultAudioSettings, type AudioSettings } from './game/audioSettings';
+import { defaultGraphics, GRAPHICS_PRESETS, graphicsPreset, type GraphicsSettings, type GraphicsPreset } from './game/graphics';
+import { performanceReport } from './game/performanceReport';
 import './settings-screen.css';
 
-type SettingsTab = 'bindings' | 'aiming' | 'audio' | 'motion';
+type SettingsTab = 'bindings' | 'aiming' | 'audio' | 'graphics' | 'motion';
 type CaptureTarget = { action: ActionId; slot: BindingSlot };
 type Proposal = ReturnType<typeof proposeBinding>;
 type Review = { proposal: Proposal; title: string; confirm: string; notes?: string[] };
@@ -16,7 +18,8 @@ const TABS: { id: SettingsTab; label: string; number: string }[] = [
   { id: 'bindings', label: 'Bindings', number: '01' },
   { id: 'aiming', label: 'Aiming', number: '02' },
   { id: 'audio', label: 'Audio', number: '03' },
-  { id: 'motion', label: 'Motion', number: '04' },
+  { id: 'graphics', label: 'Graphics', number: '04' },
+  { id: 'motion', label: 'Motion', number: '05' },
 ];
 const AUDIO_CHANNELS: { id: keyof AudioSettings; label: string; description: string }[] = [
   { id: 'masterVolume', label: 'Master volume', description: 'Overall level for all music and effects.' },
@@ -65,6 +68,7 @@ export default function SettingsScreen({ settings, onChange, onClose, storageAva
   const [capture, setCapture] = useState<CaptureTarget | null>(null);
   const [review, setReview] = useState<Review | null>(null);
   const [notice, setNotice] = useState('');
+  const [report, setReport] = useState('');
   const headingRef = useRef<HTMLHeadingElement>(null);
   const captureHeadingRef = useRef<HTMLHeadingElement>(null);
   const reviewCancelRef = useRef<HTMLButtonElement>(null);
@@ -74,6 +78,9 @@ export default function SettingsScreen({ settings, onChange, onClose, storageAva
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const controls = settings.controls;
+  const graphics = settings.graphics;
+  const changeGraphics = <K extends keyof GraphicsSettings>(key: K, value: GraphicsSettings[K]) =>
+    onChange(current => ({ ...current, graphics: { ...current.graphics, [key]: value } }));
 
   useEffect(() => {
     const previousFocus = document.activeElement as HTMLElement | null;
@@ -285,6 +292,40 @@ export default function SettingsScreen({ settings, onChange, onClose, storageAva
                 </div>;
               })}
             </div>
+          </>}
+          {tab === 'graphics' && <>
+            <div className="settings-panel-heading"><div><h2>Graphics</h2>
+              <p>Balance image detail and smoothness. Changes apply immediately{storageAvailable ? ' and save on this device' : ''}.</p></div>
+              <button className="settings-reset-all" onClick={() => { onChange(current => ({ ...current, graphics: defaultGraphics() })); setNotice('Balanced graphics restored.'); }}>Reset graphics <span aria-hidden="true">↺</span></button>
+            </div>
+            <div className="settings-graphics-presets" role="group" aria-label="Graphics preset">
+              {(['low', 'balanced', 'high'] as GraphicsPreset[]).map(preset => <button key={preset} aria-pressed={graphicsPreset(graphics) === preset}
+                onClick={() => { onChange(current => ({ ...current, graphics: { ...GRAPHICS_PRESETS[preset] } })); setNotice(`${preset[0].toUpperCase() + preset.slice(1)} graphics applied.`); }}>
+                <strong>{preset === 'low' ? 'Low' : preset === 'balanced' ? 'Balanced' : 'High'}</strong>
+                <small>{preset === 'low' ? 'More room for smooth play' : preset === 'balanced' ? 'Recommended starting point' : 'Full detail and display rate'}</small>
+              </button>)}
+            </div>
+            {graphicsPreset(graphics) === 'custom' && <p className="settings-footnote">Custom graphics settings</p>}
+            <label className="settings-preference"><span><strong>Render resolution</strong><small>Lower values draw fewer pixels. Menus and the HUD stay sharp.</small></span>
+              <select aria-label="Render resolution" value={graphics.renderScale} onChange={event => changeGraphics('renderScale', Number(event.target.value) as GraphicsSettings['renderScale'])}>
+                <option value="0.5">50%</option><option value="0.75">75%</option><option value="1">100%</option></select></label>
+            <label className="settings-preference"><span><strong>Frame-rate limit</strong><small>Choose a sustainable rate for your display. Movement and weapon timing stay the same.</small></span>
+              <select aria-label="Frame-rate limit" value={graphics.frameRate} onChange={event => changeGraphics('frameRate', Number(event.target.value) as GraphicsSettings['frameRate'])}>
+                <option value="60">60 FPS</option><option value="120">120 FPS</option><option value="0">Display refresh rate</option></select></label>
+            <label className="settings-preference"><span><strong>Terrain detail</strong><small>Controls scenery texture resolution. Every platform and opening remains visible.</small></span>
+              <select aria-label="Terrain detail" value={graphics.scenery} onChange={event => changeGraphics('scenery', event.target.value as GraphicsSettings['scenery'])}>
+                <option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+            <label className="settings-preference"><span><strong>Effects</strong><small>Adjusts decorative particles and shading. Firing and hit feedback remain visible.</small></span>
+              <select aria-label="Effects" value={graphics.effects} onChange={event => changeGraphics('effects', event.target.value as GraphicsSettings['effects'])}>
+                <option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+            <div className="settings-performance-report"><div><strong>Playtest performance report</strong><p>Copy measurements from your current or last session to help investigate stutters.</p></div>
+              <button className="settings-reset-all" onClick={async () => {
+                const text = performanceReport();
+                try { await navigator.clipboard.writeText(text); setReport(''); setNotice('Performance report copied.'); }
+                catch { setReport(text); setNotice('Select and copy the report below.'); }
+              }}>Copy performance report</button>
+            </div>
+            {report && <textarea className="settings-report-text" aria-label="Performance report" readOnly value={report} onFocus={event => event.currentTarget.select()} />}
           </>}
           {tab === 'motion' && <>
             <div className="settings-panel-heading"><div><h2>Motion</h2></div></div>

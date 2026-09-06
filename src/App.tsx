@@ -1,3 +1,4 @@
+import { retainHud } from './game/hud';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import CrouchPreview from './CrouchPreview';
 import CharacterCreator from './CharacterCreator';
@@ -7,12 +8,13 @@ import ArenaSelector from './ArenaSelector';
 import CombatHud from './CombatHud';
 import EntryLandscape from './EntryLandscape';
 import FullscreenEscapeHold from './FullscreenEscapeHold';
+import KeyboardCaptureNotice from './KeyboardCaptureNotice';
 import SettingsScreen from './SettingsScreen';
 import { useMenuAudio } from './useMenuAudio';
 import { controlHelp } from './game/controls';
 import { DEFAULT_ZOOM_LEVEL, type ZoomLevel } from './game/camera';
 import { readSettings, writeSettings, type Settings } from './game/settings';
-import { GameCapture } from './game/capture';
+import { GameCapture, type KeyboardCaptureStatus } from './game/capture';
 import { loadGame } from './game/loading';
 import { arenaIdFromSearch, getArena, type ArenaDefinition, type ArenaId } from './game/arenas';
 import type { GameAssets } from './game/assets';
@@ -59,6 +61,8 @@ export default function App() {
   const onlinePauseRef = useRef<(() => void) | null>(null);
   const [onlineActive, setOnlineActive] = useState(false);
   const captureRef = useRef<GameCapture | null>(null);
+  const [keyboardStatus, setKeyboardStatus] = useState<KeyboardCaptureStatus>('idle');
+  const retryKeyboard = useCallback(() => captureRef.current?.retryKeyboard(), []);
   const assetRequest = useRef(0);
   const runtimeArenaRef = useRef<ArenaId | null>(null);
   const alive = useRef(true);
@@ -119,7 +123,7 @@ export default function App() {
 
   useEffect(() => {
     alive.current = true;
-    const capture = new GameCapture(canvasRef.current!, shellRef.current!, pause);
+    const capture = new GameCapture(canvasRef.current!, shellRef.current!, pause, setKeyboardStatus);
     captureRef.current = capture;
     const changed = () => setFullscreen(document.fullscreenElement === shellRef.current);
     document.addEventListener('fullscreenchange', changed);
@@ -160,6 +164,7 @@ export default function App() {
     runtime?.setMuted(settings.muted);
     runtime?.setAudioVolumes(settings.audio);
     runtime?.setReducedMotion(settings.reducedMotion);
+    runtime?.setGraphics(settings.graphics);
     runtime?.setControls(settings.controls);
   }, [settings, screen]);
   useEffect(() => {
@@ -231,11 +236,12 @@ export default function App() {
       if (!alive.current || attempt !== generation.current) return;
       if (!capture.isActive()) throw new Error('Mouse capture was interrupted. Start practice again to continue.');
       if (!runtimeRef.current) {
-        const runtime = new Runtime(canvasRef.current!, gameAssets, { onHud: setHud, onPause: pause, onPerformance: setFps, onZoom: setZoom });
+        const runtime = new Runtime(canvasRef.current!, gameAssets, { onHud: next => setHud(previous => retainHud(previous, next)), onPause: pause, onPerformance: setFps, onZoom: setZoom });
         runtime.setAppearance(settingsRef.current.appearance);
         runtime.setMuted(settingsRef.current.muted);
         runtime.setAudioVolumes(settingsRef.current.audio);
         runtime.setReducedMotion(settingsRef.current.reducedMotion);
+        runtime.setGraphics(settingsRef.current.graphics);
         runtime.setControls(settingsRef.current.controls);
         runtimeRef.current = runtime;
         runtimeArenaRef.current = arenaId;
@@ -319,6 +325,7 @@ export default function App() {
             <span>MULTIPLAYER</span><small>PRIVATE MATCH · 2–8 PLAYERS</small>
           </button>
           {captureError && <p className="capture-error" role="alert" data-testid="capture-error">{captureError}</p>}
+          <KeyboardCaptureNotice status={keyboardStatus} onRetry={retryKeyboard} />
           <nav className="menu-secondary" aria-label="Pilot and preferences">
             <button className="menu-option" onClick={() => setScreen('customize')} aria-label="Customize"><span>Customize pilot</span><span aria-hidden="true">↗</span></button>
             <button className="menu-option" onClick={() => setScreen('settings')} aria-label="Settings & Controls"><span>Settings & controls</span><span aria-hidden="true">↗</span></button>
@@ -330,7 +337,7 @@ export default function App() {
       </footer>
       {import.meta.env.DEV && <details className="studio-tools"><summary>Studio</summary><button onClick={() => preview('character')}>Character preview</button><button onClick={() => preview('crouch')}>Crouch preview</button></details>}
     </main>}
-    {screen === 'multiplayer' && <Suspense fallback={<div className="loading-screen" role="status">Opening multiplayer…</div>}><MultiplayerScreen canvasRef={canvasRef} captureRef={captureRef} pauseRef={onlinePauseRef} active={!gateVisible} settings={settings} onChangeSettings={setSettings} storageAvailable={storageAvailable} onBack={backToMenu} onActiveChange={setOnlineActive} /></Suspense>}
+    {screen === 'multiplayer' && <Suspense fallback={<div className="loading-screen" role="status">Opening multiplayer…</div>}><MultiplayerScreen canvasRef={canvasRef} captureRef={captureRef} pauseRef={onlinePauseRef} active={!gateVisible} settings={settings} onChangeSettings={setSettings} storageAvailable={storageAvailable} onBack={backToMenu} onActiveChange={setOnlineActive} keyboardStatus={keyboardStatus} onRetryKeyboard={retryKeyboard} /></Suspense>}
     {loadingVisible && <LoadingScreen arena={screen === 'loading' ? selectedArena : getArena('range')} progress={loading.progress} error={loadError} retry={() => screen === 'loading' ? enterPractice() : void ensureAssets().catch(() => undefined)} onBack={backToMenu} />}
     {assets && screen === 'customize' && <div className="app-surface"><CharacterCreator assets={assets} settings={settings} onChange={setSettings} storageAvailable={storageAvailable} onExit={backToMenu} /></div>}
     {screen === 'settings' && <div className="app-surface"><SettingsScreen active={!gateVisible} settings={settings} onChange={setSettings} storageAvailable={storageAvailable} onClose={backToMenu} /></div>}
@@ -348,6 +355,7 @@ export default function App() {
         {showSettings ? <SettingsScreen embedded active={!gateVisible} settings={settings} onChange={setSettings} storageAvailable={storageAvailable} onClose={closeSettings} /> : <section className="pause-panel" role="dialog" aria-modal="true" aria-labelledby="pause-title" onKeyDown={containFocus}>
           <p className="pause-arena">{activeArena.name}</p>
           <h1 id="pause-title">PAUSED</h1>
+          <KeyboardCaptureNotice status={keyboardStatus} onRetry={retryKeyboard} />
           <div className="pause-statistics"><span><b data-testid="kills">{hud.kills.toString().padStart(2, '0')}</b> Eliminations</span><span><b>{accuracy}%</b> Accuracy</span></div>
           {captureError && <p className="capture-error" role="alert" data-testid="capture-error">{captureError}</p>}
           {pending && <p role="status" className="capture-status">Capturing mouse…</p>}
@@ -372,6 +380,8 @@ export default function App() {
           {gatePending ? 'Entering fullscreen…' : entered ? 'Return to fullscreen' : 'Enter game'}
         </button>
         {entered && <p className="gate-note">Fullscreen is required to continue.</p>}
+        {entered && screen === 'practice' && <p className="gate-note">Your practice session is paused and ready to resume.</p>}
+        {entered && <KeyboardCaptureNotice status={keyboardStatus} />}
         {gateError && <p className="gate-error" role="alert" data-testid="fullscreen-error">{gateError}</p>}
       </div>
     </main>}

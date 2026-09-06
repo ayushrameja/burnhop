@@ -11,6 +11,8 @@ import { CONFIG, getWeaponOrigin } from './simulation';
 import { CHARACTER_SCALE } from './stance';
 import { getReloadProgress } from './reload';
 import { OutpostScenery } from './outpostRenderer';
+import { defaultGraphics, normalizeGraphics, type GraphicsSettings } from './graphics';
+import { CharacterParts } from './characterParts';
 import type { GameAssets } from './assets';
 import type {
   GameEvent,
@@ -115,6 +117,12 @@ function rounded(
   ctx.fill();
 }
 
+function compactEffects<T extends { life: number }>(items: T[], dt: number): void {
+  let write = 0;
+  for (const item of items) if ((item.life -= dt) > 0) items[write++] = item;
+  items.length = write;
+}
+
 /** Canvas-only presentation. Coordinates and effects never feed back into simulation. */
 export class GameRenderer {
   private ctx: CanvasRenderingContext2D;
@@ -147,21 +155,41 @@ export class GameRenderer {
   private frameCount = 0;
   private initialized = false;
   private outpost: OutpostScenery | null = null;
+  private graphics = defaultGraphics();
+  private characterParts = new CharacterParts();
+  private bounds = { left: 0, top: 0 };
+  private exhaustTime = 0;
+  private drawnActors = 0;
+  private culledActors = 0;
+  private presentActors = new Set<string>();
   private actorAnimations = new Map<string, ActorAnimation>();
   constructor(
     private canvas: HTMLCanvasElement,
     private assets: GameAssets,
   ) {
-    const context = canvas.getContext('2d');
+    const context = canvas.getContext('2d', { alpha: false });
     if (!context) throw new Error('Canvas 2D is unavailable in this browser.');
     this.ctx = context;
     if (assets.arena.theme === 'outpost') this.outpost = new OutpostScenery(assets.arena);
+    this.outpost?.setDetail(this.graphics.scenery);
     this.resize();
     this.cameraAnchor = {
       x: assets.arena.playerSpawn.x + CONFIG.bodyWidth / 2,
       y: assets.arena.playerSpawn.y + CONFIG.bodyHeight / 2,
     };
     this.camera = getCameraTarget(this.cameraAnchor, assets.arena, this.zoom);
+  }
+  setGraphics(value: GraphicsSettings): void {
+    const next = normalizeGraphics(value);
+    const resized = next.renderScale !== this.graphics.renderScale;
+    this.graphics = next; this.outpost?.setDetail(next.scenery);
+    if (resized) this.resize();
+  }
+  getPerformanceDiagnostics() {
+    return { graphics: { ...this.graphics }, canvas: { width: this.canvas.width, height: this.canvas.height },
+      devicePixelRatio: window.devicePixelRatio || 1, zoom: this.zoomLevel,
+      drawnActors: this.drawnActors, culledActors: this.culledActors, particles: this.particles.length,
+      characterCacheBytes: this.characterParts.cacheBytes, terrain: this.outpost?.getDiagnostics() ?? null };
   }
   prewarmSpawn(point: Vec2): void {
     if (!this.outpost) return;
@@ -192,11 +220,13 @@ export class GameRenderer {
   }
   resize() {
     const rect = this.canvas.getBoundingClientRect();
+    this.bounds = { left: rect.left, top: rect.top };
     this.width = Math.max(1, rect.width);
     this.height = Math.max(1, rect.height);
-    this.dpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.canvas.width = Math.round(this.width * this.dpr);
-    this.canvas.height = Math.round(this.height * this.dpr);
+    this.dpr = Math.min(window.devicePixelRatio || 1, 2) * this.graphics.renderScale;
+    const width = Math.max(1, Math.round(this.width * this.dpr)), height = Math.max(1, Math.round(this.height * this.dpr));
+    if (this.canvas.width !== width) this.canvas.width = width;
+    if (this.canvas.height !== height) this.canvas.height = height;
     this.viewportScale = Math.min(this.width / 1280, this.height / 720);
     this.offsetX = (this.width - 1280 * this.viewportScale) / 2;
     this.offsetY = (this.height - 720 * this.viewportScale) / 2;
@@ -223,7 +253,7 @@ export class GameRenderer {
     right: number;
     bottom: number;
   } {
-    const rect = this.canvas.getBoundingClientRect();
+    const rect = this.bounds;
     return {
       left: rect.left + this.offsetX,
       top: rect.top + this.offsetY,
@@ -232,7 +262,7 @@ export class GameRenderer {
     };
   }
   screenToWorld(clientX: number, clientY: number): Vec2 {
-    const rect = this.canvas.getBoundingClientRect();
+    const rect = this.bounds;
     return {
       x:
         (clientX - rect.left - this.offsetX) / this.viewportScale / this.zoom +
@@ -243,7 +273,7 @@ export class GameRenderer {
     };
   }
   worldToScreen(x: number, y: number): Vec2 {
-    const rect = this.canvas.getBoundingClientRect();
+    const rect = this.bounds;
     return {
       x:
         (x - this.camera.x) * this.zoom * this.viewportScale +
@@ -257,6 +287,7 @@ export class GameRenderer {
   }
   destroy() {
     this.outpost?.destroy();
+    this.characterParts.destroy();
     this.particles = [];
     this.tracers = [];
     this.labels = [];
@@ -266,7 +297,7 @@ export class GameRenderer {
   resetOnlinePresentation(): void {
     this.initialized = false; this.recoil = 0; this.hitConfirm = 0; this.localHit = 0; this.phase = 0;
     this.walkAmount = 0; this.airborneAmount = 0; this.thrustAmount = 0;
-    this.particles = []; this.tracers = []; this.labels = []; this.reticle = null;
+    this.particles = []; this.tracers = []; this.labels = []; this.reticle = null; this.exhaustTime = 0;
   }
   renderOnline(actors: OnlineRenderActor[], localId: string, tick: number, events: PresentationEvent[], dt: number,
     reducedMotion = false, aimMode: AimMode = 'radial', liveAim?: LiveAimInput): void {
@@ -375,26 +406,32 @@ export class GameRenderer {
       p.y += p.vy * dt;
       p.vy += 230 * dt;
     }
-    this.particles = this.particles.filter((p) => p.life > 0);
-    this.tracers = this.tracers.filter((t) => (t.life -= dt) > 0);
-    this.labels = this.labels.filter((l) => (l.life -= dt) > 0);
+    compactEffects(this.particles, 0);
+    compactEffects(this.tracers, dt);
+    compactEffects(this.labels, dt);
     // Character and exhaust share one pose, including transitions and left-facing mirrors.
     pose.recoil = this.recoil;
     if (onlineActors) pose.hit = this.localHit > 0;
-    const geometry = calculateCharacterPose(pose);
-    if (player.thrusting && !reducedMotion && this.frameCount % 2 === 0) {
-      const facing = Math.cos(aimAngle) >= 0 ? 1 : -1;
-      geometry.nozzles.forEach((nozzle, index) =>
-        this.particle(
-          px + player.width / 2 + nozzle.x * facing * CHARACTER_SCALE,
-          feetY + nozzle.y * CHARACTER_SCALE,
-          player.vx * 0.15 + (seed(this.frameCount + index) - 0.5) * 24,
-          75,
-          0.25,
-          3,
-          '#e2bd82',
-        ),
-      );
+    const exhaustRate = this.graphics.effects === 'low' ? 0 : this.graphics.effects === 'medium' ? 15 : 30;
+    this.exhaustTime = player.thrusting && !reducedMotion ? this.exhaustTime + dt * exhaustRate : 0;
+    const exhaustBursts = Math.min(3, Math.floor(this.exhaustTime + 1e-7));
+    this.exhaustTime -= exhaustBursts;
+    if (exhaustBursts > 0) {
+      const geometry = calculateCharacterPose(pose);
+      for (let burst = 0; burst < exhaustBursts; burst++) {
+        const facing = Math.cos(aimAngle) >= 0 ? 1 : -1;
+        geometry.nozzles.forEach((nozzle, index) =>
+          this.particle(
+            px + player.width / 2 + nozzle.x * facing * CHARACTER_SCALE,
+            feetY + nozzle.y * CHARACTER_SCALE,
+            player.vx * 0.15 + (seed(this.frameCount + index) - 0.5) * 24,
+            75,
+            0.25,
+            3,
+            '#e2bd82',
+          ),
+        );
+      }
     }
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.fillStyle = NIGHT.letterbox;
@@ -454,6 +491,7 @@ export class GameRenderer {
         { aimAngle: Math.PI, crouchAmount: 0, target: true, hit: t.hitTicks > 0 },
         BOT_APPEARANCE,
         this.assets.images,
+        this.characterParts,
       );
       this.targetHealth(t.x + t.width / 2, t.y - 30, t.health);
     } else if (!onlineActors) {
@@ -480,8 +518,10 @@ export class GameRenderer {
       );
     }
     if (onlineActors) {
-      const present = new Set(onlineActors.map(actor => actor.player.id));
-      for (const id of this.actorAnimations.keys()) if (!present.has(id)) this.actorAnimations.delete(id);
+      this.drawnActors = player.health > 0 ? 1 : 0; this.culledActors = 0;
+      this.presentActors.clear();
+      for (const actor of onlineActors) this.presentActors.add(actor.player.id);
+      for (const id of this.actorAnimations.keys()) if (!this.presentActors.has(id)) this.actorAnimations.delete(id);
       for (const actor of onlineActors) if (actor.player.id !== player.id) this.drawOnlineActor(actor, dt, reducedMotion);
     }
     if (!onlineActors || player.health > 0) drawDetailedCharacter(
@@ -492,6 +532,7 @@ export class GameRenderer {
       pose,
       appearance,
       this.assets.images,
+      this.characterParts,
     );
     if (onlineActors && player.health > 0) {
       const local = onlineActors.find(actor => actor.player.id === player.id);
@@ -504,7 +545,7 @@ export class GameRenderer {
       this.reticle = { mode: aimMode, pivot, ...dash };
       ctx.save();
       ctx.shadowColor = '#2e4635';
-      ctx.shadowBlur = 2;
+      ctx.shadowBlur = this.graphics.effects === 'high' ? 2 : 0;
       line(
         ctx,
         dash.start.x,
@@ -547,13 +588,15 @@ export class GameRenderer {
     ctx.restore();
     if (aimMode === 'pointer' && (!onlineActors || player.health > 0)) this.crosshair(pivot);
     // Very subtle night vignette grounds the scene without obscuring play.
-    const edge = ctx.createLinearGradient(0, 0, 0, 720);
-    edge.addColorStop(0, '#040c111a');
-    edge.addColorStop(0.16, '#040c1100');
-    edge.addColorStop(0.86, '#040c1100');
-    edge.addColorStop(1, '#040c1124');
-    ctx.fillStyle = edge;
-    ctx.fillRect(0, 0, 1280, 720);
+    if (this.graphics.effects !== 'low') {
+      const edge = ctx.createLinearGradient(0, 0, 0, 720);
+      edge.addColorStop(0, '#040c111a');
+      edge.addColorStop(0.16, '#040c1100');
+      edge.addColorStop(0.86, '#040c1100');
+      edge.addColorStop(1, '#040c1124');
+      ctx.fillStyle = edge;
+      ctx.fillRect(0, 0, 1280, 720);
+    }
     if (debug) {
       rounded(ctx, 20, 180, 250, 115, 5, '#182c28e8');
       ctx.fillStyle = '#d8e0bb';
@@ -586,6 +629,12 @@ export class GameRenderer {
     animation.thrust = mix(animation.thrust, p.thrusting ? 1 : 0, 1 - Math.exp(-dt * 18));
     animation.recoil = Math.max(0, animation.recoil - dt * 16);
     animation.hit = Math.max(0, animation.hit - dt);
+    // Preserve animation clocks offscreen; skip pose solving, vector paths and labels.
+    if (p.x + p.width + 192 < this.camera.x || p.x - 192 > this.camera.x + 1280 / this.zoom
+      || p.y + p.height + 64 < this.camera.y || p.y - 192 > this.camera.y + 720 / this.zoom) {
+      this.culledActors++; return;
+    }
+    this.drawnActors++;
     const pose: CharacterPose = { aimAngle: p.aimAngle, crouchAmount: p.crouchAmount, locomotion: true,
       walkPhase: animation.phase, moveSpeed: p.vx || animation.direction, verticalSpeed: p.vy,
       walkAmount: animation.walk, airborneAmount: animation.air, thrustAmount: animation.thrust,
@@ -593,7 +642,7 @@ export class GameRenderer {
       reloadProgress: getReloadProgress(p.weapon.reloadTicks, CONFIG.reloadTicks), time: this.time, reducedMotion, hit: animation.hit > 0 };
     const ctx = this.ctx;
     ctx.save(); ctx.globalAlpha = actor.connected ? 1 : 0.55;
-    drawDetailedCharacter(ctx, p.x + p.width / 2, p.y + p.height, CHARACTER_SCALE, pose, actor.appearance, this.assets.images);
+    drawDetailedCharacter(ctx, p.x + p.width / 2, p.y + p.height, CHARACTER_SCALE, pose, actor.appearance, this.assets.images, this.characterParts);
     this.actorLabel(actor, p.x + p.width / 2, p.y - 12, false);
     ctx.restore();
   }
@@ -1165,11 +1214,11 @@ export class GameRenderer {
     size: number,
     color: string,
   ) {
-    if (this.particles.length < 180)
+    if (this.particles.length < (this.graphics.effects === 'low' ? 36 : this.graphics.effects === 'medium' ? 90 : 180))
       this.particles.push({ x, y, vx, vy, life, max: life, size, color });
   }
   private event(event: PresentationEvent, reducedMotion: boolean, local = true) {
-    const count = reducedMotion ? 2 : 8;
+    const count = reducedMotion || this.graphics.effects === 'low' ? 2 : this.graphics.effects === 'medium' ? 4 : 8;
     if (event.type === 'shot') {
       this.tracers.push({ ...event, life: 0.075 });
       if (local) this.recoil = 1;
@@ -1281,7 +1330,7 @@ export class GameRenderer {
   }
   private crosshair(pivot: Vec2) {
     if (!this.pointer) return;
-    const rect = this.canvas.getBoundingClientRect();
+    const rect = this.bounds;
     const x = (this.pointer.x - rect.left - this.offsetX) / this.viewportScale,
       y = (this.pointer.y - rect.top - this.offsetY) / this.viewportScale;
     if (x < 0 || x > 1280 || y < 0 || y > 720) return;
@@ -1291,7 +1340,7 @@ export class GameRenderer {
     ctx.strokeStyle = this.hitConfirm > 0 ? '#f4d28c' : '#eff0ce';
     ctx.lineWidth = 2;
     ctx.shadowColor = '#2e4635';
-    ctx.shadowBlur = 2;
+    ctx.shadowBlur = this.graphics.effects === 'high' ? 2 : 0;
     for (const sign of [-1, 1]) {
       line(
         ctx,

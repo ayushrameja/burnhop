@@ -24,6 +24,19 @@ function setup() {
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 describe('online actor presentation', () => {
+  it('culls offscreen drawing while preserving actors and resuming their presentation on return', () => {
+    const { renderer, actors } = setup();
+    actors[1].player.x += 5000;
+    const before = JSON.stringify(actors);
+    renderer.renderOnline(actors, 'me', 2, [], 1 / 60);
+    expect(drawDetailedCharacter).toHaveBeenCalledTimes(1);
+    expect(renderer.getPerformanceDiagnostics()).toMatchObject({ drawnActors: 1, culledActors: 1 });
+    expect(JSON.stringify(actors)).toBe(before);
+    actors[1].player.x -= 5000; vi.mocked(drawDetailedCharacter).mockClear();
+    renderer.renderOnline(actors, 'me', 3, [], 1 / 60);
+    expect(drawDetailedCharacter).toHaveBeenCalledTimes(2);
+    renderer.destroy();
+  });
   it('gives remote shots their own recoil and gives only the damaged pilot a hit flash', () => {
     const { renderer, actors } = setup();
     renderer.renderOnline(actors, 'me', 2, [

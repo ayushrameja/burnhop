@@ -28,6 +28,22 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe('online session lifecycle', () => {
+  it('reserves input IDs sparsely and survives an abrupt refresh without an unload callback', () => {
+    const writes = vi.spyOn(sessionStorage, 'setItem');
+    const first = new OnlineConnection();
+    let previous = 0;
+    for (let i = 0; i < 600; i++) { const id = first.nextInputId(); expect(id).toBe(previous + 1); previous = id; }
+    expect(writes).toHaveBeenCalledTimes(3);
+    const refreshed = new OnlineConnection();
+    expect(refreshed.nextInputId()).toBeGreaterThan(previous);
+    first.dispose(); refreshed.dispose();
+  });
+  it('continues input ordering if session storage is denied', () => {
+    vi.spyOn(sessionStorage, 'setItem').mockImplementation(() => { throw new Error('Denied'); });
+    const connection = new OnlineConnection();
+    for (let i = 1; i <= 600; i++) expect(connection.nextInputId()).toBe(i);
+    connection.dispose();
+  });
   it('coalesces playing snapshots while publishing phase changes immediately and cancelling stale timers', async () => {
     const room = fakeRoom(); sdk.create.mockResolvedValue(room);
     const connection = new OnlineConnection({ endpoint: 'ws://localhost:2567' });

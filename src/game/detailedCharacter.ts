@@ -6,6 +6,7 @@ import { clothingMaterial, HAIR_COLORS, SKIN_COLORS, type DetailedAppearance } f
 import type { Vec2 } from './types';
 import { drawCharacterHitFlash } from './characterHitFlash';
 import { RELOAD_CUES } from './reload';
+import type { CharacterParts } from './characterParts';
 
 export interface DetailedArmGeometry { shoulder: Vec2; elbow: Vec2; hand: Vec2; upperLength: number; forearmLength: number }
 export interface DetailedMagazineGeometry { center: Vec2; angle: number; opacity: number; seated: boolean; fresh: boolean }
@@ -449,8 +450,13 @@ function drawEyewear(ctx: CanvasRenderingContext2D, a: DetailedAppearance) {
   line(ctx,[-5.5,-15.3,-3.9,-14.9],p.light,.7);
   line(ctx,[7,-15,8.3,-14.6],p.light,.7);
 }
-function drawHead(ctx: CanvasRenderingContext2D, rig: DetailedCharacterRig, a: DetailedAppearance) {
+function drawHead(ctx: CanvasRenderingContext2D, rig: DetailedCharacterRig, a: DetailedAppearance, parts?: CharacterParts) {
   ctx.save();ctx.translate(rig.aim.headPivot.x,rig.aim.headPivot.y);ctx.rotate(rig.aim.headAngle);
+  if (parts) parts.drawHead(ctx, a, buffer => drawHeadArtwork(buffer, a));
+  else drawHeadArtwork(ctx, a);
+  ctx.restore();
+}
+function drawHeadArtwork(ctx: CanvasRenderingContext2D, a: DetailedAppearance) {
   drawFaceShape(ctx,a);
   // Headwear masks only the hair it covers; the selected hairstyle is never modified.
   if(a.headgear==='none')drawHair(ctx,a);
@@ -458,7 +464,6 @@ function drawHead(ctx: CanvasRenderingContext2D, rig: DetailedCharacterRig, a: D
     ctx.save();ctx.beginPath();ctx.rect(-24,-18.3,50,30);ctx.clip();drawHair(ctx,a);ctx.restore();
   }
   drawFacialHair(ctx,a);drawEyesAndExpression(ctx,a);drawHeadgear(ctx,a);drawEyewear(ctx,a);
-  ctx.restore();
 }
 
 function drawHand(ctx: CanvasRenderingContext2D, a: DetailedAppearance, trigger: boolean) {
@@ -531,10 +536,11 @@ function drawExhaust(ctx: CanvasRenderingContext2D, rig: DetailedCharacterRig, p
 export function drawDetailedCharacter(
   ctx: CanvasRenderingContext2D, x: number, y: number, scale: number,
   pose: CharacterPose, appearance: DetailedAppearance, _images: Record<string, HTMLImageElement> = {},
+  parts?: CharacterParts,
 ): void {
   if (pose.hit) {
     drawCharacterHitFlash(ctx,x,y,scale,buffer =>
-      drawDetailedCharacter(buffer,0,0,1,{ ...pose, hit: false },appearance,_images));
+      drawDetailedCharacter(buffer,0,0,1,{ ...pose, hit: false },appearance,_images,parts));
     return;
   }
   const rig=calculateDetailedCharacterRig(pose);
@@ -547,7 +553,7 @@ export function drawDetailedCharacter(
   drawTorso(ctx,rig,appearance);
   drawLeg(ctx,rig.geometry.nearLeg,appearance,true,waistY);
   drawBelt(ctx,rig,appearance);
-  drawHead(ctx,rig,appearance);
+  drawHead(ctx,rig,appearance,parts);
   // The forearm remains in front of the chest while its shoulder sits behind the jacket.
   const sleeve=clothingMaterial(appearance.topColor, 'top'), skin=SKIN_COLORS[appearance.skin];
   const supportWidth=(appearance.build==='slim'?4.6:appearance.build==='broad'?6.2:5.4);

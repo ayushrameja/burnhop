@@ -236,7 +236,8 @@ test.describe('high density displays', () => {
     for (const viewport of [{ width: 1280, height: 800 }, { width: 1024, height: 768 }]) {
       await page.setViewportSize(viewport);
       await ticks(page, 3);
-      expect(await page.getByTestId('game-canvas').evaluate(canvas => (canvas as HTMLCanvasElement).width)).toBe(Math.round((await page.getByTestId('game-canvas').boundingBox())!.width * 2));
+      const scale = await page.evaluate(() => window.__BURNHOP__!.metrics().rendering.graphics.renderScale);
+      expect(await page.getByTestId('game-canvas').evaluate(canvas => (canvas as HTMLCanvasElement).width)).toBe(Math.round((await page.getByTestId('game-canvas').boundingBox())!.width * 2 * scale));
       const point = await safePointer(page);
       await ticks(page, 2);
       checkRadial(await state(page));

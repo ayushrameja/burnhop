@@ -198,3 +198,12 @@
   .settings-change-list li > span:last-child { gap: 5px; }
   .settings-change-list kbd { max-width: 82px; font-size: 7px; }
 }
+.settings-graphics-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 20px 0; }
+.settings-graphics-presets button { padding: 16px; text-align: left; border: 1px solid #566052; background: #19231d; color: #eef0d8; cursor: pointer; }
+.settings-graphics-presets button[aria-pressed=true] { border-color: #d8ae71; background: #39372a; }
+.settings-graphics-presets strong { display: block; font: 600 23px var(--display); }
+.settings-graphics-presets small { display: block; margin-top: 7px; font: 12px/1.5 var(--body); color: #c0c8b5; }
+.settings-performance-report { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 28px; padding-top: 22px; border-top: 1px solid #40543f; }
+.settings-performance-report p { max-width: 420px; font-size: 12px; line-height: 1.5; color: #bdc7b3; }
+.settings-report-text { width: 100%; min-height: 220px; margin-top: 16px; background: #121d17; color: #e7ebd8; border: 1px solid #63745e; padding: 12px; font: 11px/1.5 monospace; }
+@media (max-width: 600px) { .settings-graphics-presets { grid-template-columns: 1fr; } .settings-performance-report { align-items: flex-start; flex-direction: column; } }
