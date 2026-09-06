@@ -89,3 +89,27 @@ Host controls follow the longest-connected remaining pilot. Explicit Leave relea
 The state update target is now 45 Hz, simulation/input remain 60 Hz, and remote interpolation is 80 ms. Cosmetics are cached, playing React snapshots coalesce to 10 Hz, and spawn terrain is prepared progressively in the lobby. Local bounded diagnostics report state-arrival jitter, slow frames and actual spatial reconciliation changes (see architecture documentation). No compute plan, region, dependencies or billing settings change.
 
 Pre-deployment validation: 335 unit/shared/backend tests, all builds/typechecks, 89 general Chromium checks (one existing native-capture opt-in skip), and both multiplayer suites passed. The production smoke now verifies diagnostic samples as well as invitations, readiness, start/cancellation, play, refresh recovery and host transfer. The new eight-client Linux impairment run passed its 90-second smoke gate with 1,644 actual dropped packets, a one-second full stall, zero disconnect/errors, maximum rolling p99 work 3.474 ms and peak RSS 76,775,424 bytes. It does not satisfy the full fifteen-minute memory gate. Evidence: ignored `load-results/linux-network-45hz/`. Deployment and full Frankfurt capacity evidence are recorded separately in `load-results/smoothness-release.md`.
+
+## September 6 combat update
+
+The armed update uses protocol/gameplay revision **2** and compatibility **`burnhop-2:gameplay-2:a2888458:e38d8d40`**. Both providers must use this shared weapon, pickup, melee, hit-region and map contract. The runtime remains 60 Hz with 45 Hz state updates, eight slots and five-minute matches.
+
+The final candidate passed **446 unit/shared/backend tests**, all three builds/typechecks, **112 general Chromium scenarios**, and both online browser suites. One existing native OS pointer-capture scenario remains opt-in and skipped. The added real WebSocket regression contests one pickup, checks distinct per-hand state, and reconnects without duplicate inventory or stale firing. A browser fixture separately checks lethal-hit red feedback, trade-kill blue feedback, heartbeat cleanup and reduced-motion layouts. The final general suite's one intermittent Resume setup failure was corrected with explicit capture readiness checks; all gameplay assertions were preserved.
+
+Final Linux impairment used the matching build for **90.393 active seconds**, eight clients, all seven weapons, **1,539 actual dropped packets**, a one-second full outage, and no gameplay disconnects/errors. Maximum rolling simulation p99 was **3.205 ms**, maximum RSS **96.05 MiB**, and sustained schedule backlog zero. Recovery required 421 server resynchronizations and discarded 16.667 ms at one catch-up cap; successful connectivity does not establish smoothness. This is a short smoke, separate from the unchanged 900-second capacity/memory gate. Its complete evidence is retained locally in `load-results/linux-combat-final/`.
+
+Both rendering stress presets exercised eight dual-armed pilots, 360 shots and 16 deaths per density, reached their fragment caps (48 Balanced / 24 Low), and removed every fragment. Headless Chromium at high pixel density showed Balanced frame p95/p99 of **50.0/50.1 ms**, while Low stayed at **16.7/16.8 ms**. These observations do not establish performance on the affected Windows machine.
+
+Local, reproducible worksheets and measurements:
+
+```sh
+# Run Vite locally first.
+node scripts/report-combat-balance.mjs
+BURNHOP_BENCH_COMBAT=1 BURNHOP_BENCH_VARIANT=balanced node scripts/benchmark-renderer.mjs load-results/combat-renderer-balanced.json
+BURNHOP_BENCH_COMBAT=1 BURNHOP_BENCH_VARIANT=low node scripts/benchmark-renderer.mjs load-results/combat-renderer-low.json
+node dist-tools/loadtest.mjs --endpoint https://de-fra-24270fd2.colyseus.cloud --seconds 900 --output load-results/combat-frankfurt-15min.json
+```
+
+The final capacity and publication record belongs in local `load-results/combat-release.md`; only a completed run with every gate passing counts. Earlier runs deliberately interrupted for cover/stance corrections remain separate. Before release, retain the prior matched commit **`c47c4c5e89421ce8f130f1f57bdae554db24808f`** and its Vercel deployment **`9KqnDfUJjdL6ZspBqcBcRsoQzGDS`** for rollback. Deploy between matches, check the compatibility ID, and restore both providers together if needed.
+
+Human balance, sound recognition, spawn-to-pickup fairness, the affected Windows machine and the real Canada–India connection remain separate validation work. No new analytics service, server tier or region is introduced.
