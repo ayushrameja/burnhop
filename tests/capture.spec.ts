@@ -199,14 +199,14 @@ test('locked relative deltas move aim independently of client coordinates', asyn
   expect((await captureState(page)).aim!.pointer).toEqual({ x: before.x - 37, y: before.y - 21 });
   await page.mouse.down({ button: 'right' });
   await ticks(page);
-  expect((await captureState(page)).aim).toMatchObject({ mode: 'pointer', locked: true, firing: false });
+  expect((await captureState(page)).aim).toMatchObject({ mode: 'radial', locked: true, firing: false });
   await page.mouse.down({ button: 'left' });
   await ticks(page, 8);
   expect((await captureState(page)).aim!.firing).toBe(true);
   const shots = (await captureState(page)).world!.shotsFired;
   await page.mouse.up({ button: 'right' });
   await ticks(page, 8);
-  expect((await captureState(page)).aim).toMatchObject({ mode: 'radial', locked: true, firing: true });
+  expect((await captureState(page)).aim).toMatchObject({ mode: 'pointer', locked: true, firing: true });
   expect((await captureState(page)).world!.shotsFired).toBeGreaterThan(shots);
   await page.mouse.up({ button: 'left' });
 });

@@ -197,10 +197,10 @@ test.describe('zoom on high density displays', () => {
         await page.keyboard.press('Tab');
         await expectZoom(page, level);
         await ticks(page, 3);
-        await expectVisualAim(page, 'radial');
+        await expectVisualAim(page, 'pointer');
         await page.mouse.down({ button: 'right' });
         await ticks(page, 3);
-        await expectVisualAim(page, 'pointer');
+        await expectVisualAim(page, 'radial');
         await page.mouse.up({ button: 'right' });
         if (viewport.width === 1024) {
           await page.screenshot({ path: testInfo.outputPath(`camera-${level}x-2x-dpr.png`) });
