@@ -66,6 +66,7 @@ export const PlayerWire = schema({
   impulseX: t.float64().default(0),
   impulseY: t.float64().default(0),
   fireHeldLast: t.boolean().default(false),
+  nextShotOffhand: t.boolean().default(false),
   connected: t.boolean().default(true),
   ready: t.boolean().default(false),
   joinedOrder: t.uint32().default(0),
@@ -134,7 +135,7 @@ export function playerFromWire(wire: PlayerWire, target?: MatchPlayer): MatchPla
 const PLAYER_FIELDS = [
   'id', 'nickname', 'x', 'y', 'width', 'height', 'vx', 'vy', 'grounded', 'coyoteTicks', 'jumpBufferTicks',
   'aimAngle', 'crouchAmount', 'health', 'fuel', 'thrusting', 'thrustLatched', 'fuelDelayTicks',
-  'equipTicks', 'fireLockTicks', 'fireHeldLast', 'meleeWindupTicks', 'meleeCooldownTicks', 'meleeAimAngle', 'meleeSequence', 'impulseX', 'impulseY',
+  'equipTicks', 'fireLockTicks', 'fireHeldLast', 'nextShotOffhand', 'meleeWindupTicks', 'meleeCooldownTicks', 'meleeAimAngle', 'meleeSequence', 'impulseX', 'impulseY',
   'connected', 'ready', 'joinedOrder', 'lifeId', 'kills', 'deaths', 'respawnTicks', 'protectionTicks',
 ] as const;
 

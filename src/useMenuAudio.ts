@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, type SyntheticEvent } from 'react';
 import { MenuAudio } from './game/menuAudio';
 import type { AudioSettings } from './game/audioSettings';
+import { MENU_MUSIC, type MenuMusicScene } from './game/menuMusic';
 
 /** Shell-owned audio survives practice runtime creation and teardown. */
-export function useMenuAudio(muted: boolean, musicActive: boolean, volumes: AudioSettings, dance = false) {
+export function useMenuAudio(muted: boolean, musicActive: boolean, volumes: AudioSettings, scene: MenuMusicScene = 'lobby') {
   const audioRef = useRef<MenuAudio | null>(null);
   const keyboardFocus = useRef(false);
 
@@ -23,7 +24,11 @@ export function useMenuAudio(muted: boolean, musicActive: boolean, volumes: Audi
   useEffect(() => { audioRef.current?.setMuted(muted); }, [muted]);
   useEffect(() => { audioRef.current?.setVolumes(volumes); }, [volumes]);
   useEffect(() => { audioRef.current?.setMusicActive(musicActive); }, [musicActive]);
-  useEffect(() => { audioRef.current?.setDanceActive(dance); }, [dance]);
+  useEffect(() => {
+    const track = MENU_MUSIC[scene];
+    if (track.file) audioRef.current?.setMusicFile(track.file);
+    audioRef.current?.setDanceActive(!track.file);
+  }, [scene]);
   const getDanceTime = useCallback(() => audioRef.current?.getDanceTime() ?? null, []);
 
   const controlFor = (event: SyntheticEvent): HTMLElement | null => {

@@ -1,6 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
 import { SETTINGS_STORAGE_KEY, type Settings } from '../src/game/settings';
+import { WEAPON_AUDIO_SAMPLES } from '../src/game/weaponAudio';
+import { WEAPON_SOUND_IDS } from '../src/game/audioSynthesis';
 import { enterMenu, enterPractice, installCapture, openMenu } from './helpers/capture';
+import { choosePracticeLoadout } from './helpers/combat';
 
 interface SoundStart {
   id: number;
@@ -16,13 +19,14 @@ interface SoundStart {
 interface GameplayAudioSnapshot { decoded: string[]; starts: SoundStart[] }
 type ObservedWindow = Window & { __GAMEPLAY_AUDIO__?: () => GameplayAudioSnapshot };
 const FOOTSTEP = /^footstep-\d\.wav$/;
-const GUNFIRE = /^shot-pistol$/;
-const RELOAD = /^reload-(remove|insert|rack)\.wav$/;
-const SAMPLES = [
+const GUNFIRE = /^weapons\/shot-pistol-[123]\.wav$/;
+const RELOAD = /^weapons\/reload-\w+-(remove|insert|rack)\.wav$/;
+const LEGACY_SAMPLES = [
   'rifle-1.wav', 'rifle-2.wav', 'rifle-3.wav',
   'footstep-1.wav', 'footstep-2.wav', 'footstep-3.wav', 'footstep-4.wav',
   'land.wav', 'impact-metal.wav', 'reload-remove.wav', 'reload-insert.wav', 'reload-rack.wav',
 ];
+const SAMPLES = [...LEGACY_SAMPLES, ...WEAPON_AUDIO_SAMPLES.map(sample => `${sample}.wav`)];
 
 /** Record actual decoded clips and native source starts; playback stays intact. */
 async function observeGameplayAudio(page: Page) {
@@ -34,7 +38,7 @@ async function observeGameplayAudio(page: Page) {
     const fetchResource = window.fetch;
     window.fetch = async (...args) => {
       const response = await fetchResource(...args);
-      const sample = response.url.match(/\/assets\/audio\/sfx\/([^/?]+)(?:\?.*)?$/)?.[1];
+      const sample = response.url.match(/\/assets\/audio\/sfx\/([^?]+)(?:\?.*)?$/)?.[1];
       if (sample) {
         const arrayBuffer = response.arrayBuffer.bind(response);
         response.arrayBuffer = async () => {
@@ -62,10 +66,7 @@ async function observeGameplayAudio(page: Page) {
       source.start = (...args) => {
         const state = window.__BURNHOP__?.snapshot();
         observed = {
-          id: starts.length, sample: source.buffer ? buffers.get(source.buffer) ?? (!source.loop && state?.player.weapon.reloadTicks && Math.abs(source.buffer.duration - .14) < .002
-            ? `reload-${state.player.weapon.reloadTicks <= 72 * .45 ? 'insert' : 'remove'}.wav`
-            : !source.loop && state?.player.weapon.reloadTicks && Math.abs(source.buffer.duration - .22) < .002 ? 'reload-rack.wav'
-              : !source.loop && Math.abs(source.buffer.duration - .19) < .002 ? 'shot-pistol' : 'procedural') : 'empty',
+          id: starts.length, sample: source.buffer ? buffers.get(source.buffer) ?? 'procedural' : 'empty',
           loop: source.loop, stopped: false, ended: false, tick: state?.tick ?? -1,
           grounded: state?.player.grounded ?? false, vx: state?.player.vx ?? 0,
           reloadTicks: state?.player.weapon.reloadTicks ?? -1,
@@ -91,10 +92,10 @@ async function ticks(page: Page, count: number) {
   const target = await page.evaluate(count => window.__BURNHOP__!.snapshot().tick + count, count);
   await page.waitForFunction(target => window.__BURNHOP__!.snapshot().tick >= target, target);
 }
-async function readyPractice(page: Page) {
+async function readyPractice(page: Page, weaponSamples = true) {
   await openMenu(page);
   await enterPractice(page);
-  await expect.poll(async () => (await audio(page)).decoded.sort()).toEqual([...SAMPLES].sort());
+  await expect.poll(async () => (await audio(page)).decoded.sort()).toEqual([...(weaponSamples ? SAMPLES : LEGACY_SAMPLES)].sort());
   await page.waitForFunction(() => window.__BURNHOP__!.snapshot().player.grounded);
   await ticks(page, 5);
 }
@@ -164,14 +165,14 @@ test('gunfire plays the pistol sound and reload sounds follow the simulation thr
   expect((await sounds(page, GUNFIRE)).length).toBeGreaterThan(0);
   expect(await page.evaluate(() => window.__BURNHOP__!.snapshot().player.weapon.ammo)).toBeLessThan(12);
   await page.keyboard.press('KeyR');
-  await page.waitForFunction(() => (window as ObservedWindow).__GAMEPLAY_AUDIO__!().starts.some(start => start.sample === 'reload-remove.wav'));
+  await page.waitForFunction(() => (window as ObservedWindow).__GAMEPLAY_AUDIO__!().starts.some(start => start.sample === 'weapons/reload-pistol-remove.wav'));
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Resume', exact: true })).toBeVisible();
   const paused = await page.evaluate(() => window.__BURNHOP__!.snapshot());
   expect(paused.player.weapon.reloadTicks).toBeGreaterThan(0);
   const beforeResume = await sounds(page, RELOAD);
-  expect(beforeResume.some(start => start.sample === 'reload-remove.wav')).toBe(true);
-  expect(beforeResume.some(start => start.sample === 'reload-insert.wav')).toBe(false);
+  expect(beforeResume.some(start => start.sample === 'weapons/reload-pistol-remove.wav')).toBe(true);
+  expect(beforeResume.some(start => start.sample === 'weapons/reload-pistol-insert.wav')).toBe(false);
   expect(beforeResume.every(start => start.stopped || start.ended)).toBe(true);
   // Longer than the entire remaining reload: paused audio must not use wall-clock timers.
   await page.waitForTimeout(1200);
@@ -181,13 +182,86 @@ test('gunfire plays the pistol sound and reload sounds follow the simulation thr
   await page.waitForFunction(() => window.__BURNHOP__!.snapshot().player.weapon.ammo === 12);
   const finished = await sounds(page, RELOAD);
   const stages = [...new Set(finished.map(start => start.sample))];
-  expect(stages).toEqual(['reload-remove.wav', 'reload-insert.wav', 'reload-rack.wav']);
-  expect(finished.filter(start => start.sample === 'reload-remove.wav').map(start => start.id))
-    .toEqual(beforeResume.filter(start => start.sample === 'reload-remove.wav').map(start => start.id));
-  expect(finished.filter(start => start.sample !== 'reload-remove.wav').every(start => start.tick > paused.tick)).toBe(true);
+  expect(stages).toEqual(['weapons/reload-pistol-remove.wav', 'weapons/reload-pistol-insert.wav', 'weapons/reload-pistol-rack.wav']);
+  expect(finished.filter(start => start.sample === 'weapons/reload-pistol-remove.wav').map(start => start.id))
+    .toEqual(beforeResume.filter(start => start.sample === 'weapons/reload-pistol-remove.wav').map(start => start.id));
+  expect(finished.filter(start => start.sample !== 'weapons/reload-pistol-remove.wav').every(start => start.tick > paused.tick)).toBe(true);
   await ticks(page, 24);
   expect((await sounds(page, RELOAD)).map(start => start.id)).toEqual(finished.map(start => start.id));
   expect(await page.evaluate(() => window.__BURNHOP__!.snapshot().player.weapon)).toMatchObject({ ammo: 12, reloadTicks: 0 });
+});
+
+for (const weaponId of WEAPON_SOUND_IDS) {
+  test(`${weaponId} uses three recorded shot takes and its recorded reload through real loadout controls`, async ({ page }, testInfo) => {
+    await readyPractice(page);
+    await choosePracticeLoadout(page, weaponId);
+    const shotPattern = new RegExp(`^weapons/shot-${weaponId}-[123]\\.wav$`);
+    for (let take = 0; take < 3; take++) {
+      await page.waitForFunction(() => window.__BURNHOP__!.snapshot().player.weapon.cooldownTicks === 0);
+      await fire(page);
+    }
+    const fired = await sounds(page, shotPattern);
+    expect([...new Set(fired.map(start => start.sample))].sort()).toEqual([
+      `weapons/shot-${weaponId}-1.wav`, `weapons/shot-${weaponId}-2.wav`, `weapons/shot-${weaponId}-3.wav`,
+    ]);
+    await page.keyboard.press('KeyR');
+    await page.waitForFunction(() => window.__BURNHOP__!.snapshot().player.weapon.reloadTicks > 0);
+    if (weaponId === 'sniper') {
+      await expect.poll(async () => (await sounds(page, /^weapons\/reload-sniper-remove\.wav$/)).length).toBe(1);
+      await page.screenshot({ path: testInfo.outputPath('recorded-weapon-reload.png') });
+    }
+    await page.waitForFunction(() => window.__BURNHOP__!.snapshot().player.weapon.reloadTicks === 0);
+    const reloaded = await sounds(page, new RegExp(`^weapons/reload-${weaponId}-`));
+    expect(reloaded.map(start => start.sample)).toEqual([
+      `weapons/reload-${weaponId}-remove.wav`, `weapons/reload-${weaponId}-insert.wav`, `weapons/reload-${weaponId}-rack.wav`,
+    ]);
+    expect(reloaded.every(start => start.reloadTicks > 0)).toBe(true);
+  });
+}
+
+test('mixed dual weapons play their own shot and reload recordings in sequential hand order', async ({ page }) => {
+  await readyPractice(page);
+  await choosePracticeLoadout(page, 'pistol', 'uzi');
+  await page.getByTestId('game-canvas').hover();
+  await page.mouse.down();
+  await page.waitForFunction(() => {
+    const player = window.__BURNHOP__!.snapshot().player;
+    return player.weapon.shotCounter > 0 && player.offhand!.shotCounter > 0;
+  });
+  await page.mouse.up();
+  expect((await sounds(page, /^weapons\/shot-uzi-/)).length).toBeGreaterThan(0);
+  expect((await sounds(page, GUNFIRE)).length).toBeGreaterThan(0);
+  await page.keyboard.press('KeyR');
+  await page.waitForFunction(() => window.__BURNHOP__!.snapshot().player.offhand!.reloadTicks > 0);
+  await page.waitForFunction(() => {
+    const player = window.__BURNHOP__!.snapshot().player;
+    return player.weapon.ammo === 12 && player.offhand!.ammo === 20;
+  });
+  const reloads = await sounds(page, RELOAD);
+  expect(reloads.map(start => start.sample)).toEqual([
+    'weapons/reload-pistol-remove.wav', 'weapons/reload-pistol-insert.wav', 'weapons/reload-pistol-rack.wav',
+    'weapons/reload-uzi-remove.wav', 'weapons/reload-uzi-insert.wav', 'weapons/reload-uzi-rack.wav',
+  ]);
+  expect(reloads[3].tick).toBeGreaterThan(reloads[2].tick);
+});
+
+test('blocked weapon recordings leave shooting and reload playable with local fallback audio', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.route('**/assets/audio/sfx/weapons/**', route => route.abort('failed'));
+  await readyPractice(page, false);
+  const before = (await sounds(page, /^procedural$/)).length;
+  await fire(page);
+  expect((await sounds(page, /^procedural$/)).length).toBeGreaterThan(before);
+  const beforeReload = (await sounds(page, /^procedural$/)).length;
+  await page.keyboard.press('KeyR');
+  await page.waitForFunction(() => window.__BURNHOP__!.snapshot().player.weapon.ammo === 12);
+  expect((await sounds(page, /^procedural$/)).length).toBe(beforeReload + 3);
+  expect((await audio(page)).decoded.some(sample => sample.startsWith('weapons/'))).toBe(false);
+  expect(await sounds(page, /^weapons\//)).toEqual([]);
+  await page.keyboard.press('Escape');
+  expect((await sounds(page, /^procedural$/)).every(start => start.stopped || start.ended)).toBe(true);
+  expect(errors).toEqual([]);
 });
 
 test('pause audio levels mute gameplay categories independently and persist through menu and reload', async ({ page }) => {
@@ -200,7 +274,7 @@ test('pause audio levels mute gameplay categories independently and persist thro
   const selected = (await saved(page)).audio;
   expect(selected).toMatchObject({ masterVolume: 0.65, musicVolume: 0.07, weaponsVolume: 0, movementVolume: 0 });
   await resumeFromSettings(page);
-  const quietWeapons = (await sounds(page, /^(shot-|reload-)/)).length;
+  const quietWeapons = (await sounds(page, /^weapons\/(shot-|reload-)/)).length;
   const quietMovement = (await sounds(page, /^(footstep-|land\.wav)/)).length;
   await fire(page);
   await page.keyboard.press('KeyR');
@@ -209,7 +283,7 @@ test('pause audio levels mute gameplay categories independently and persist thro
   await ticks(page, 35);
   await page.keyboard.up('KeyD');
   await ticks(page, 12);
-  expect((await sounds(page, /^(shot-|reload-)/)).length).toBe(quietWeapons);
+  expect((await sounds(page, /^weapons\/(shot-|reload-)/)).length).toBe(quietWeapons);
   expect((await sounds(page, /^(footstep-|land\.wav)/)).length).toBe(quietMovement);
 
   await pauseAudioSettings(page);

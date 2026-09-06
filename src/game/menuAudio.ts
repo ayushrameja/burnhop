@@ -29,6 +29,19 @@ export class MenuAudio {
   private danceGain: GainNode | null = null;
   private danceStarted = 0;
   private danceOffset = 0;
+  private musicFile = 'midnight-hangar.mp3';
+
+  setMusicFile(file: string): void {
+    if (this.disposed || file === this.musicFile) return;
+    this.musicFile = file;
+    this.revision++;
+    if (this.music) {
+      this.music.pause();
+      this.music.src = `${import.meta.env.BASE_URL}assets/audio/${file}`;
+      this.music.load();
+    }
+    this.syncMusic();
+  }
 
   /** Call directly from a user gesture; both browser playback requests begin synchronously. */
   unlock(): void {
@@ -38,7 +51,7 @@ export class MenuAudio {
 
     try {
       if (!this.music && !this.danceActive) {
-        this.music = new Audio(`${import.meta.env.BASE_URL}assets/audio/midnight-hangar.mp3`);
+        this.music = new Audio(`${import.meta.env.BASE_URL}assets/audio/${this.musicFile}`);
         this.music.loop = true;
         this.music.volume = this.volumes.masterVolume * this.volumes.musicVolume;
         this.music.preload = 'auto';
@@ -78,7 +91,8 @@ export class MenuAudio {
 
   /** null means the silent visual should advance on its own presentation clock. */
   getDanceTime(): number | null {
-    return this.danceSource && this.context ? this.danceOffset + this.context.currentTime - this.danceStarted : null;
+    if (this.danceSource && this.context) return this.danceOffset + this.context.currentTime - this.danceStarted;
+    return this.music && !this.music.paused && this.shouldPlayMusic() ? this.music.currentTime : null;
   }
 
   private syncDance(): void {
@@ -147,6 +161,13 @@ export class MenuAudio {
       if (this.music) { this.music.muted = true; this.music.pause(); }
       this.syncDance(); return;
     } else this.stopDance();
+    if (!this.music && this.unlocked && !this.disposed) {
+      try {
+        this.music = new Audio(`${import.meta.env.BASE_URL}assets/audio/${this.musicFile}`);
+        this.music.loop = true;
+        this.music.preload = 'auto';
+      } catch { /* Audio is optional when media APIs are unavailable. */ }
+    }
     const music = this.music;
     if (!music) return;
     music.volume = this.volumes.masterVolume * this.volumes.musicVolume;

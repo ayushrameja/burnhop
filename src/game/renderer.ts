@@ -71,7 +71,7 @@ export interface OnlineRenderActor {
   lifeId: number;
 }
 export interface CombatPresentation {
-  pickups:ReadonlyArray<{id:string;weaponId:WeaponId;x:number;y:number;available:boolean}>;
+  pickups:ReadonlyArray<{id:string;weaponId:WeaponId;x:number;y:number;available:boolean;label?:string}>;
   sniperDrop?:{x:number;y:number;seconds:number}|null;
   showHitRegions?:boolean;
   highlightedPickupId?:string;
@@ -682,6 +682,12 @@ export class GameRenderer {
       ctx.strokeStyle=pickup.weaponId==='sniper'?'#f0c26a':highlighted?'#c5fff0':'#83bfc0';ctx.lineWidth=highlighted?2:1;
       ctx.globalAlpha=pickup.available?1:.3;ctx.fillStyle=pickup.available?'#263d3dcc':'#263d3d44';
       ctx.beginPath();ctx.ellipse(0,18,27,5,0,0,Math.PI*2);ctx.fill();ctx.stroke();
+      if(pickup.label){
+        ctx.font='600 10px "Courier New", monospace';ctx.textAlign='center';
+        const text=pickup.label.toUpperCase(),width=ctx.measureText(text).width+8;
+        ctx.fillStyle='#172d2ee6';ctx.fillRect(-width/2,-47,width,15);
+        ctx.fillStyle=highlighted?'#d2fff2':'#e3ece2';ctx.fillText(text,0,-36);
+      }
       if(pickup.available){
         const bob=reducedMotion?0:Math.sin(this.time*2.5+pickup.x*.03)*2;
         ctx.translate(-5,-3+bob);ctx.scale(1.2,1.2);drawWeaponArtwork(ctx,pickup.weaponId);

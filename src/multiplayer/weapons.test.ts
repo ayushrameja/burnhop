@@ -54,9 +54,17 @@ describe('authoritative acquisition and equipment', () => {
     expect(p.offhand).toBeNull(); expect(p.weapon.weaponId).toBe('m416');
     expect(Object.values(state.pickups).find(item => item.kind === 'dropped' && item.weapon.instanceId === 'used-uzi')?.weapon.ammo).toBe(3);
   });
-  it('blocks pairing revolvers and collection through a wall', () => {
+  it('allows revolvers as either hand while preserving separate weapon identities', () => {
     const state = playing(), p = state.players.a;
-    p.x = 150; state.pickups.pad0.weapon = createWeapon('revolver', 'revolver');
+    p.x = 150; p.weapon = createWeapon('revolver', 'main-revolver');
+    state.pickups.pad0.weapon = createWeapon('revolver', 'second-revolver');
+    collectPickups(state, { a: { ...neutralInput(), pairPressed: true } }, map, []);
+    expect(p.weapon.instanceId).toBe('main-revolver');
+    expect(p.offhand).toMatchObject({ weaponId: 'revolver', instanceId: 'second-revolver', ammo: 6 });
+  });
+  it('blocks pairing rifles and collection through a wall', () => {
+    const state = playing(), p = state.players.a;
+    p.x = 150; state.pickups.pad0.weapon = createWeapon('ak47', 'rifle');
     collectPickups(state, { a: { ...neutralInput(), pairPressed: true } }, map, []);
     expect(p.offhand).toBeNull(); expect(state.pickups.pad0.available).toBe(true);
     const wall = compileArena({ ...arena, platforms: [{ x: 185, y: 520, width: 5, height: 80 }] });
@@ -95,7 +103,7 @@ describe('combat snapshots and effects', () => {
     const p = playing().players.a;
     equipWeapon(p, createWeapon('ump', 'offhand'), 'pair');
     Object.assign(p.offhand!, { ammo: 4, shotCounter: 83, recoil: 1.4, bloom: .4, reloadTicks: 12, reloadQueued: true });
-    Object.assign(p, { impulseX: -220, impulseY: -80, meleeAimAngle: .2, meleeSequence: 4, fireLockTicks: 12 });
+    Object.assign(p, { impulseX: -220, impulseY: -80, meleeAimAngle: .2, meleeSequence: 4, fireLockTicks: 12, nextShotOffhand: true });
     const wire = new PlayerWire(); syncPlayerWire(wire, p);
     const restored = playerFromWire(wire);
     expect(restored).toEqual(p);

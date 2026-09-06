@@ -15,6 +15,7 @@ test('graphics presets and custom options persist without changing other prefere
   await page.getByRole('tab', { name: 'Graphics' }).click();
   const preset = page.getByRole('group', { name: 'Graphics preset' });
   await expect(preset.getByRole('button', { name: /Balanced/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('combobox', { name: 'Frame-rate limit' })).toHaveValue('120');
   await preset.getByRole('button', { name: /^Low/ }).click();
   await expect(page.getByRole('combobox', { name: 'Render resolution' })).toHaveValue('0.5');
   await page.getByRole('combobox', { name: 'Frame-rate limit' }).selectOption('120');

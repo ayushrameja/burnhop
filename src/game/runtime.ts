@@ -6,10 +6,11 @@ import { createWeapon, WEAPONS, type WeaponId } from './weapons';
 import { getReloadProgress } from './reload';
 import { clampAimPointer, moveAimPointer, resolveAimAngle, resolveWeaponAim, type AimMode } from './aim';
 import { Renderer } from './renderer';
-import { CONFIG, cloneWorld, createWorld, getWeaponOrigin, releasePlayerInput, stepSimulation } from './simulation';
+import { CONFIG, cloneWorld, compileArena, createWorld, getWeaponOrigin, releasePlayerInput, stepSimulation } from './simulation';
+import { collectPracticeWeapon, createPracticeWeaponPickups, nearestPracticeWeapon, type PracticeWeaponPickup } from './practiceWeapons';
 import { FixedStepClock } from './timing';
 import { ActionInput } from './input';
-import { normalizeControls, type ControlsSettings } from './controls';
+import { actionBindings, bindingLabel, normalizeControls, type ControlsSettings } from './controls';
 import { defaultGraphics, normalizeGraphics, FramePacer, type GraphicsSettings } from './graphics';
 import { registerPerformanceReport } from './performanceReport';
 import { FramePerformance } from './framePerformance';
@@ -21,6 +22,7 @@ import { type GameEvent, type HudState, type InputCommand, type Vec2, type World
 interface RuntimeCallbacks { onHud: (hud: HudState) => void; onPause: () => void; onPerformance?: (fps: number | null) => void; onZoom?: (zoom: ZoomLevel) => void }
 export interface RuntimeDiagnostics {
   snapshot: () => WorldState;
+  pickups: () => PracticeWeaponPickup[];
   toScreen: (x: number, y: number) => { x: number; y: number };
   metrics: () => { fps: number | null; frames: number; running: boolean; tick: number; performance: ReturnType<FramePerformance['snapshot']>; rendering: ReturnType<Renderer['getPerformanceDiagnostics']> };
   appearances: () => { player: DetailedAppearance; target: DetailedAppearance };
@@ -55,6 +57,9 @@ export class GameRuntime {
   private feedback = { heartbeat: true, intensity: 1 };
   private killSequence = 0;
   private practiceEquipmentSequence = 0;
+  private practicePickups: PracticeWeaponPickup[];
+  private pickupLabels = { single: 'F', pair: 'Q' };
+  private pickupNotice: { text: string; expires: number } | null = null;
   private reducedMotion = false;
   private resizeObserver: ResizeObserver;
   private performance = new FramePerformance();
@@ -71,6 +76,7 @@ export class GameRuntime {
 
   constructor(private canvas: HTMLCanvasElement, private assets: GameAssets, private callbacks: RuntimeCallbacks) {
     this.world = createWorld(assets.arena);
+    this.practicePickups = createPracticeWeaponPickups(assets.arena);
     this.previous = cloneWorld(this.world);
     this.renderer = new Renderer(canvas, assets);
     this.resizeObserver = new ResizeObserver(() => {
@@ -95,6 +101,7 @@ export class GameRuntime {
     document.addEventListener('pointerlockchange', this.pointerLockChanged);
     this.diagnostic = {
       snapshot: () => cloneWorld(this.world),
+      pickups: () => this.practicePickups.map(pickup => ({ ...pickup })),
       toScreen: (x, y) => this.renderer.worldToScreen(x, y),
       metrics: () => ({ fps: this.fps, frames: this.frames, running: !this.paused && !this.disposed, tick: this.world.tick, performance: this.performance.snapshot(), rendering: this.renderer.getPerformanceDiagnostics() }),
       appearances: () => ({ player: { ...this.appearance }, target: { ...BOT_APPEARANCE } }),
@@ -139,6 +146,7 @@ export class GameRuntime {
     this.raf = requestAnimationFrame(this.frame);
   }
   reset(): void {
+    this.pickupNotice = null;
     this.audio.pause();
     this.audio.updateReload(-1);
     this.world = createWorld(this.assets.arena);
@@ -174,7 +182,7 @@ export class GameRuntime {
     p.weapon = createWeapon(main, `practice:main:${++this.practiceEquipmentSequence}`);
     p.offhand = offhand && WEAPONS[main].dualWield && WEAPONS[offhand].dualWield
       ? createWeapon(offhand, `practice:offhand:${++this.practiceEquipmentSequence}`) : null;
-    p.equipTicks = 18; p.fireHeldLast = false;
+    p.equipTicks = 18; p.fireHeldLast = false; p.nextShotOffhand = false;
     this.input.clear(); this.zoomLevel = clampViewLevel(this.zoomLevel, p);
     this.renderer.setZoom(this.zoomLevel); this.callbacks.onZoom?.(this.zoomLevel);
     this.previous = cloneWorld(this.world); this.audio.pause();
@@ -190,6 +198,8 @@ export class GameRuntime {
     const controls = normalizeControls(value), key = JSON.stringify(controls);
     if (key === this.controlsKey) return;
     this.controlsKey = key;
+    this.pickupLabels = { single: actionBindings(controls, 'pickup').map(bindingLabel).join(' / ') || 'Unbound',
+      pair: actionBindings(controls, 'pair').map(bindingLabel).join(' / ') || 'Unbound' };
     this.input.configure(controls);
     this.clearInput();
     this.refreshInputAim();
@@ -292,6 +302,19 @@ export class GameRuntime {
           point => this.renderer.worldToScreen(point.x, point.y), this.latestAimAngle, this.aimMode).angle,
       };
       const tickEvents = stepSimulation(this.world, command, this.assets.arena);
+      if (command.pickupPressed || command.pairPressed) {
+        const pickup = collectPracticeWeapon(this.world.player, this.nearestPickup(), command);
+        if (pickup) {
+          this.pickupNotice = null;
+          tickEvents.push(pickup);
+          this.audio.playPickup(pickup.weaponId === 'sniper');
+          this.zoomLevel = clampViewLevel(this.zoomLevel, this.world.player);
+          this.renderer.setZoom(this.zoomLevel); this.callbacks.onZoom?.(this.zoomLevel);
+        } else if (command.pairPressed) {
+          this.pickupNotice = { text: this.nearestPickup()
+            ? 'Pairing needs a handgun or SMG in both hands.' : 'Move closer to a handgun or SMG to pair.', expires: this.world.tick + 120 };
+        }
+      }
       this.input.reconcile(this.world.player, tickEvents);
       // Contacts and reload cues follow simulation progress, including pause/resume.
       const p = this.world.player;
@@ -315,7 +338,8 @@ export class GameRuntime {
   };
   private draw(events: GameEvent[], dt: number, alpha: number): void {
     this.renderer.render(this.previous, this.world, alpha, this.appearance, events, dt, this.debug, this.reducedMotion, this.aimMode,
-      { pointer: this.pointer, previousAngle: this.latestAimAngle });
+      { pointer: this.pointer, previousAngle: this.latestAimAngle }, undefined,
+      { pickups: this.practicePickups, highlightedPickupId: this.nearestPickup()?.id });
     this.latestAimAngle = this.renderer.getRenderedAimAngle();
   }
   private resetPerformance(): void {
@@ -331,9 +355,16 @@ export class GameRuntime {
   }
   private publishHud(): void {
     const p = this.world.player;
+    const nearest = this.nearestPickup();
+    const canPair = nearest && WEAPONS[p.weapon.weaponId].dualWield && WEAPONS[nearest.weaponId].dualWield;
     this.callbacks.onHud({ ...getCombatHud(p, {
       shotsFired: this.world.shotsFired, hits: this.world.hits, kills: this.world.kills, targetHealth: this.world.target.health }),
-      damageSequence: 0, killSequence: this.killSequence });
+      damageSequence: 0, killSequence: this.killSequence,
+      pickupPrompt: this.pickupNotice && this.pickupNotice.expires > this.world.tick ? this.pickupNotice.text
+        : nearest ? `${nearest.label} · ${this.pickupLabels.single} Equip alone${canPair ? ` · ${this.pickupLabels.pair} Pair` : ''}` : '' });
+  }
+  private nearestPickup(): PracticeWeaponPickup | undefined {
+    return nearestPracticeWeapon(this.world.player, this.practicePickups, compileArena(this.assets.arena));
   }
   destroy(): void {
     if (this.disposed) return;

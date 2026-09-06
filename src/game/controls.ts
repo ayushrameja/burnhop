@@ -25,13 +25,13 @@ export interface BindingProposal { controls: ControlsSettings; changes: BindingC
 export function defaultControls(): ControlsSettings {
   return {
     bindings: {
-      moveLeft: ['KeyA', null], moveRight: ['KeyD', null], crouch: ['KeyS', 'ArrowDown'],
-      jump: ['Space', null], jetpack: ['KeyW', null], fire: ['Mouse0', null],
+      moveLeft: ['KeyA', null], moveRight: ['KeyD', null], crouch: ['KeyC', 'ArrowDown'],
+      jump: ['Space', null], jetpack: ['ShiftLeft', 'ShiftRight'], fire: ['Mouse0', null],
       aimSwitch: ['Mouse2', null], reload: ['KeyR', null], zoom: ['Tab', null],
-      pickup: ['KeyE', null], pair: ['KeyQ', null], punch: ['KeyF', null], pause: [null, null],
+      pickup: ['KeyF', null], pair: ['KeyQ', null], punch: ['KeyE', null], pause: [null, null],
     },
     behavior: { movement: 'hold', crouch: 'hold', jetpack: 'hold', fire: 'hold', aimSwitch: 'hold' },
-    jetpackSource: 'combined', defaultAimMode: 'radial',
+    jetpackSource: 'separate', defaultAimMode: 'pointer',
   };
 }
 
@@ -68,8 +68,8 @@ export function normalizeControls(value: unknown): ControlsSettings {
   for (const id of Object.keys(next.behavior) as BehaviorId[]) {
     if (behavior[id] === 'hold' || behavior[id] === 'toggle') next.behavior[id] = behavior[id];
   }
-  if (source.jetpackSource === 'separate') next.jetpackSource = 'separate';
-  if (source.defaultAimMode === 'pointer') next.defaultAimMode = 'pointer';
+  if (source.jetpackSource === 'separate' || source.jetpackSource === 'combined') next.jetpackSource = source.jetpackSource;
+  if (source.defaultAimMode === 'pointer' || source.defaultAimMode === 'radial') next.defaultAimMode = source.defaultAimMode;
   return next;
 }
 
@@ -147,7 +147,7 @@ export function controlHelp(controls: ControlsSettings): { action: ActionId; key
     { action: 'reload', keys: actionBindings(controls, 'reload').map(bindingLabel), description: 'Reload' },
     { action: 'zoom', keys: actionBindings(controls, 'zoom').map(bindingLabel), description: 'Cycle view range · higher values show more arena' },
     { action: 'pickup', keys: actionBindings(controls, 'pickup').map(bindingLabel), description: 'Equip nearby weapon alone' },
-    { action: 'pair', keys: actionBindings(controls, 'pair').map(bindingLabel), description: 'Pair a nearby pistol or SMG' },
+    { action: 'pair', keys: actionBindings(controls, 'pair').map(bindingLabel), description: 'Pair a nearby handgun or SMG' },
     { action: 'punch', keys: actionBindings(controls, 'punch').map(bindingLabel), description: 'Punch · damage and knockback' },
     { action: 'pause', keys: actionBindings(controls, 'pause').map(bindingLabel), description: 'Pause / release mouse' },
   ];

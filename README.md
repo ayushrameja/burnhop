@@ -56,19 +56,22 @@ The camera follows tightly toward the pilot's center, with a little smooth trail
 
 Press **Tab** to cycle the view ranges allowed by the equipped weapon. Pistols, revolvers and every dual loadout use **1x**; UZI/UMP allow **1x–1.5x**; AK-47/M416 allow **1x, 1.5x, 2x and 2.5x**; the sniper also allows **4x**. Higher labels show more arena with a smaller pilot; they are view-range tiers, not optical magnification. The corresponding world scales are 1.5, 1.35, 1.2, 1.1 and 0.75. The obsolete 3x/5x options are removed. Equipment changes clamp the current tier immediately. Pause/resume preserves it; a new practice session or restart resets to the pistol and 1x. The lower-left readout explicitly says **View range**.
 
+Graphics default to **Balanced** at a **120 FPS limit**. Existing saved preferences are preserved; reset controls and graphics in Settings to adopt the current defaults.
+
 Choose **Settings & Controls** from the main menu or **Settings** while paused. Bindings, aim style, sound, and motion preferences save automatically in this browser. Editing settings during practice preserves the paused session; return to the pause screen and deliberately resume to recapture the mouse.
 
 | Default input | Action |
 | --- | --- |
 | A / D | Move |
-| S / Down arrow | Crouch |
-| Space | Jump / early hop; release and press again airborne for boot thrusters |
+| C / Down arrow | Crouch |
+| Space | Jump / early hop |
+| Left or right Shift | Jetpack thrust |
 | Left mouse | Fire |
 | Right mouse | Switch to the alternate aim style |
 | R | Reload |
-| E | Equip the nearby weapon alone |
+| F | Equip the nearby weapon alone |
 | Q | Pair a nearby compatible pistol/SMG |
-| F | Punch |
+| E | Punch |
 | Tab | Cycle the equipped weapon's view range |
 | Escape | Tap to pause; hold about 2 seconds to exit fullscreen |
 | F3, development only | Physics/performance overlay |
@@ -77,27 +80,29 @@ Each action supports a primary and secondary keyboard or mouse-button binding. M
 
 Movement, crouching, firing, aim switching, and jetpack activation can each use **Hold** or **Toggle**. All default to Hold. Toggle movement switches direction when you tap the opposite direction and stops when you tap the active direction again. Toggle firing remains active through a manual reload until switched off. Pause, focus/capture loss, restart, or control changes clear active inputs and toggles; resuming requires a fresh activation.
 
-Choose **Aim line** or **Crosshair** as the default. The aim-switch binding activates the other style while held, or toggles between them. The original default is the aim line. Both modes share the latest aim angle, and firing remains independent. Default aim follows the latest mouse input every rendered frame. The line is 56 world pixels long, beginning 149.6 world pixels from the weapon pivot; a six-screen-pixel radius around the pivot retains its latest angle to prevent jitter. The crosshair follows the mouse position. Zoom keeps the pointer's screen position stable, and projections include the current camera, zoom, letterboxing, and display density.
+Choose **Aim line** or **Crosshair** as the default. The aim-switch binding activates the other style while held, or toggles between them. The default is the pointer crosshair. Both modes share the latest aim angle, and firing remains independent. Default aim follows the latest mouse input every rendered frame. The line is 56 world pixels long, beginning 149.6 world pixels from the weapon pivot; a six-screen-pixel radius around the pivot retains its latest angle to prevent jitter. The crosshair follows the mouse position. Zoom keeps the pointer's screen position stable, and projections include the current camera, zoom, letterboxing, and display density.
 
 During mouse capture, relative mouse movement controls a virtual pointer inside the playfield, so the system cursor cannot leave for another monitor. A stationary pointer continues to aim at the same screen position as the character moves. Input resets restore the configured default aim style.
 
 **Combined jump / jetpack** preserves the original Space sequence. The first press jumps; releasing and pressing again airborne engages the boots. With Toggle selected, the airborne activation remains on after release, and another press stops thrust without queuing a hop. Grounded/coyote jumps still take priority, and a descending press within the 150 ms landing window queues an early hop. A missed landing can turn that pending combined intent into thrust.
 
-**Separate jump / jetpack** starts with Space for jump and W for thrust; both can be remapped. The jetpack binding can launch directly from the ground or thrust airborne. Jump inputs still queue early hops, but never turn into thrust. Simultaneous jump and jetpack inputs combine the normal jump impulse with thrust. Landing or empty fuel stops jetpack Hold/Toggle activation and requires a fresh press; refilling fuel does not restart thrust automatically.
+**Separate jump / jetpack** is the default, with Space for jump and either Shift key for thrust; both can be remapped. The jetpack binding can launch directly from the ground or thrust airborne. Jump inputs still queue early hops, but never turn into thrust. Simultaneous jump and jetpack inputs combine the normal jump impulse with thrust. Landing or empty fuel stops jetpack Hold/Toggle activation and requires a fresh press; refilling fuel does not restart thrust automatically.
 
 The bottom-right FPS readout measures rendered frames over the latest half-second and refreshes four times per second. It shows a dash before gameplay starts and while paused. Immersive play starts only after both fullscreen and pointer capture succeed and assets have loaded. Losing either pauses the game; losing only pointer capture preserves fullscreen. Resume requires a new click to recapture. Unsupported or denied fullscreen leaves the persistent entry gate in place. Denied pointer capture returns to the existing fullscreen menu with a retry message. No windowed path can start gameplay.
 
-The second Space press activates thrust in midair, except while descending toward a landing within 150 ms: that press queues a hop on contact instead. The hop survives releasing Space, preserves horizontal momentum, and uses no fuel. Holding the original jump does **not** engage thrust or repeatedly jump. There is also approximately 130 ms of jump grace after leaving a ledge. If steering takes a buffered hop away from its landing, holding Space activates thrust when the buffer expires.
+With combined controls selected, the second Space press activates thrust in midair, except while descending toward a landing within 150 ms: that press queues a hop on contact instead. The hop survives releasing Space, preserves horizontal momentum, and uses no fuel. Holding the original jump does **not** engage thrust or repeatedly jump. There is also approximately 130 ms of jump grace after leaving a ledge. If steering takes a buffered hop away from its landing, holding Space activates thrust when the buffer expires.
 
-Holding **S** or **Down arrow** on the ground lowers the body with planted feet over approximately **0.18 seconds**. The collider follows the pose from **68** to about **54.2 world pixels** high, and full crouch walking is **160 px/s**, half the normal speed. Releasing both keys returns to standing when there is room overhead; a low ceiling keeps the character crouched until it clears. Jumping and airborne movement release crouch without changing jump or jetpack power or air speed. Crouch resumes after landing if a crouch key remains held and Space is released. The gun, aim indicator, and shots use the lowered stance's shared weapon origin. Pausing clears held input while preserving the physical pose; standing clearance is checked again when play resumes.
+Holding **C** or **Down arrow** on the ground lowers the body with planted feet over approximately **0.18 seconds**. The collider follows the pose from **68** to about **54.2 world pixels** high, and full crouch walking is **160 px/s**, half the normal speed. Releasing both keys returns to standing when there is room overhead; a low ceiling keeps the character crouched until it clears. Jumping and airborne movement release crouch without changing jump or jetpack power or air speed. Crouch resumes after landing if a crouch key remains held and Space is released. The gun, aim indicator, and shots use the lowered stance's shared weapon origin. Pausing clears held input while preserving the physical pose; standing clearance is checked again when play resumes.
 
 A full tank provides **3.5 seconds** of continuous thrust (40% longer). Engine acceleration is 3600 px/s² for the first 10% of fuel spent, then tapers linearly to 1800 px/s² at empty. This scales thrust, not velocity; gravity remains 1500 px/s² and the flight rise-speed cap remains 480 px/s. Power depends on remaining fuel, so tapping thrust does not reset the initial kick. At empty fuel, release and press again before the boot thrusters can restart. Fuel recovers on the ground or in the air after 0.4 seconds without thrust, taking approximately 3.3 seconds to refill.
 
 This is a safe practice range: the bot takes damage and respawns; the player stays at full health. **Practice weapon** and **Second hand** in the pause menu let you inspect the same weapons and dual handling used online. Non-sniper reserves are unlimited, but every magazine requires reloading. The sniper begins with five loaded rounds and ten reserve rounds. The active appearance, named looks, and sound preferences stay in this browser.
 
+Both practice maps also have permanent stations for all seven weapons: along the Practice range firing line and together beside the Outpost spawn in the western courtyard. Walk to a labeled gun and press **F** to equip it or **Q** to pair compatible weapons. Station weapons have unlimited reserves, including the sniper, and remain stocked after pickup and restart.
+
 ## Combat and pickups
 
-Each multiplayer life starts with **100 HP and a 12-round pistol**. Weapons appear on six authored Outpost pads; there are no automatic weapon swaps. Move within 60 world pixels with a clear path, then use **E** to equip alone or **Q** to pair. Equipping alone drops both previous guns; pairing keeps the main gun and replaces any offhand. Pads refill after 20 seconds using a server-shuffled bag containing pistol, revolver, AK-47, M416, UZI and UMP once each. Death and replacement drops preserve their ammunition and cooldowns. Ordinary dropped guns last 15 seconds, with at most 16 retained; sniper drops last 30 seconds.
+Each multiplayer life starts with **100 HP and a 12-round pistol**. Weapons appear on six authored Outpost pads; there are no automatic weapon swaps. Move within 60 world pixels with a clear path, then use **F** to equip alone or **Q** to pair. Equipping alone drops both previous guns; pairing keeps the main gun and replaces any offhand. Pads refill after 20 seconds using a server-shuffled bag containing pistol, revolver, AK-47, M416, UZI and UMP once each. Death and replacement drops preserve their ammunition and cooldowns. Ordinary dropped guns last 15 seconds, with at most 16 retained; sniper drops last 30 seconds.
 
 The following are initial tuning values from `src/game/weapons.ts`, intended to change with playtesting. Damage is per shot before range falloff, rounding and the target's remaining health.
 
@@ -113,7 +118,7 @@ The following are initial tuning values from `src/game/weapons.ts`, intended to 
 
 Leg hits use **0.75×** damage. Head/body/legs occupy the top 25%, middle 45% and bottom 30% of the shared stance collider, independent of clothing or body build. The AK has stronger recoil than the M416. UZI trades magazine life and distant accuracy for rapid close-range fire; UMP fires more slowly with higher damage per round and gentler spread. Range falloff, spread, recoil, recoil recovery and maximum shot distance are configurable alongside these values. The P90 is not included.
 
-Dual wielding supports any pair drawn from **pistol, UZI and UMP**, including mixed weapons. One aim and trigger drive two independent magazines and cooldowns; the offhand starts staggered. Each hand fires at two-thirds of its single-gun cadence, with 1.6× spread and 1.3× recoil, and the view is fixed at 1x. **R** reloads eligible magazines sequentially, main then offhand, blocking firing until the queue completes. The inactive gun is visibly stowed while its hand reloads the other. Revolvers, rifles and the sniper are single-weapon equipment. Equipping imposes a 0.3-second handling delay.
+Dual wielding supports any pair drawn from **pistol, revolver, UZI and UMP**, including mixed weapons. Each gun sits in its own hand, with shot origins matching the visible grips. One aim and trigger drive two independent magazines and cooldowns. Short clicks alternate the starting hand; holding fire staggers the two guns. If the next hand is empty or cooling, the ready hand can fire without bypassing either cooldown. Each hand fires at two-thirds of its single-gun cadence, with 1.6× spread and 1.3× recoil, and the view is fixed at 1x. **R** reloads eligible magazines sequentially, main then offhand, blocking firing until the queue completes. The inactive gun is visibly stowed while its hand reloads the other. Rifles and the sniper are single-weapon equipment. Equipping imposes a 0.3-second handling delay. Practice displays an explanation if Q cannot pair the nearby weapon.
 
 A sniper supply drop is scheduled at **45, 135 and 225 seconds**, with an eight-second warning and a visible descending capsule. It is skipped if a sniper is already held by a living player or available on the map. Its five-round magazine and ten-round reserve, slow cycling, three-second reload and limited availability balance its high damage and wider view.
 
@@ -147,7 +152,7 @@ Outpost recreates the classic Mini Militia terrain arrangement with original Can
 
 `src/game/collision.ts` shares deterministic polygon collision between movement, shots, crouch clearance, and landing prediction. Static Outpost artwork is cached by `src/game/outpostRenderer.ts`; its visible contour boundaries come from the same map data. Rock, concrete and wood have material detail cached at up to 3× resolution according to zoom and display density, with a 128 MiB terrain cache budget. The bunker roof lips provide clearance for crouching through both directions while retaining standing-height collision. `src/game/types.ts` describes the integration boundary. `docs/prototype-plan.md` preserves the accepted product/technical plan.
 
-The Colyseus server owns the private 2–8-player match, hit resolution, pickups, health and scores. Client prediction restores both complete weapon instances and movement state before replaying pending commands. Compatibility revision **`burnhop-2:gameplay-2`** fingerprints movement, weapon/dual/melee/acquisition tuning, hit-region proportions and the bundled map. Browser/server releases must advertise the same full identifier. Current validation measurements and rollout status belong in the separate verification and multiplayer release records; this feature description does not establish production deployment.
+The Colyseus server owns the private 2–8-player match, hit resolution, pickups, health and scores. Client prediction restores both complete weapon instances and movement state before replaying pending commands. Compatibility revision **`burnhop-3:gameplay-3`** fingerprints movement, weapon/dual/melee/acquisition tuning, hit-region proportions and the bundled map. Browser/server releases must advertise the same full identifier. Current validation measurements and rollout status belong in the separate verification and multiplayer release records; this feature description does not establish production deployment.
 
 ## Learning route
 

@@ -146,6 +146,33 @@ describe('menu audio lifecycle', () => {
     expect(music.volume).toBe(0.1);
   });
 
+  it('switches scene files on one player, uses its clock, and stays silent through pending playback', async () => {
+    audio.setMusicFile('moonwalk-at-sundown.mp3');
+    audio.setMusicActive(true);
+    audio.unlock();
+    await settle();
+    const music = media[0];
+    music.currentTime = 3;
+    expect(audio.getDanceTime()).toBe(3);
+    const pending = deferred();
+    music.play.mockImplementationOnce(() => pending.promise);
+    audio.setMusicFile('hangar-bhangra.mp3');
+    expect(media).toHaveLength(1);
+    expect(music.src).toBe('/assets/audio/hangar-bhangra.mp3');
+    expect(music.load).toHaveBeenCalledOnce();
+    audio.setMuted(true);
+    music.paused = false;
+    pending.resolve();
+    await settle();
+    expect(music.paused).toBe(true);
+    expect(audio.getDanceTime()).toBeNull();
+    audio.setMuted(false);
+    await settle();
+    expect(music.paused).toBe(false);
+    audio.setMusicFile('hangar-bhangra.mp3');
+    expect(music.load).toHaveBeenCalledOnce();
+  });
+
   it('pauses for mute, visibility and gameplay without resetting the music playhead', async () => {
     audio.unlock();
     expect(media[0].muted).toBe(true);

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { GameAudio, type MovementAudioState } from './audio';
+import { GameAudio, SAMPLE_NAMES, type MovementAudioState } from './audio';
 import { defaultAudioSettings } from './audioSettings';
 import { createSyntheticBuffer, WEAPON_SOUND_IDS } from './audioSynthesis';
 import { createWeapon, WEAPONS } from './weapons';
@@ -141,7 +141,7 @@ describe('gameplay sound lifecycle and simulation timing', () => {
   });
   afterEach(() => { audio.destroy(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-  it('unlocks lazily, preloads once, and routes original gunshots through controlled category gain', async () => {
+  it('unlocks lazily, preloads once, and rotates recorded gunshots through controlled category gain', async () => {
     audio.play([shot]);
     audio.setThrust(true);
     expect(contexts).toHaveLength(0);
@@ -149,14 +149,85 @@ describe('gameplay sound lifecycle and simulation timing', () => {
     await settle();
     await audio.unlock();
     const context = contexts[0];
-    expect(fetchSample).toHaveBeenCalledTimes(12);
+    expect(fetchSample).toHaveBeenCalledTimes(SAMPLE_NAMES.length);
+    expect(new Set(fetchSample.mock.calls.map(([url]) => url)).size).toBe(SAMPLE_NAMES.length);
     expect(context.sources).toHaveLength(0);
     audio.play([shot, shot, shot, shot]);
-    expect(labels(context)).toEqual(['synthesized', 'synthesized', 'synthesized', 'synthesized']);
-    expect(context.sources.every(source => source.playbackRate.value === 1 && sourceGain(source) === 0.72)).toBe(true);
+    expect(labels(context)).toEqual(['shot-pistol-1.wav', 'shot-pistol-2.wav', 'shot-pistol-3.wav', 'shot-pistol-1.wav']);
+    expect(context.sources.every(source => source.playbackRate.value === 1 && sourceGain(source) > 0 && sourceGain(source) <= 1)).toBe(true);
     expect(context.gains.slice(0, 3).map(gain => gain.gain.value)).toEqual([1, 0.8, 0.85]);
     expect(context.compressor.ratio.value).toBe(12);
     expect(context.compressor.threshold.value).toBe(-6);
+  });
+
+  it('uses recorded firing, three reload stages and a mechanical dry fire for every weapon', async () => {
+    await audio.unlock(); await settle();
+    const context = contexts[0];
+    for (const weaponId of WEAPON_SOUND_IDS) {
+      const before = context.sources.length;
+      audio.play([{ ...shot, weaponId }]);
+      expect(labels(context).at(-1)).toMatch(new RegExp(`^shot-${weaponId}-[123]\\.wav$`));
+      const weapon = createWeapon(weaponId, `test:${weaponId}`);
+      audio.updateWeaponReloads('me', weapon);
+      for (const progress of [0, .25, .6, .9]) {
+        weapon.reloadTicks = Math.max(1, Math.round(WEAPONS[weaponId].reloadTicks * (1 - progress)));
+        audio.updateWeaponReloads('me', weapon);
+      }
+      expect(labels(context).slice(before + 1)).toEqual([
+        `reload-${weaponId}-remove.wav`, `reload-${weaponId}-insert.wav`, `reload-${weaponId}-rack.wav`,
+      ]);
+    }
+    audio.play([{ ...shot, type: 'dryfire' }]);
+    expect(labels(context).at(-1)).toBe('dry-fire.wav');
+  });
+
+  it.each(['fetch', 'http', 'decode'] as const)('keeps weapon-specific fallback cues audible on %s failure', async failure => {
+    if (failure === 'fetch') vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Offline')));
+    if (failure === 'http') vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }));
+    if (failure === 'decode') {
+      class UndecodableContext extends Context {
+        override decodeAudioData = vi.fn(async (_bytes: ArrayBuffer): Promise<Buffer> => { throw new Error('Unsupported audio'); });
+      }
+      vi.stubGlobal('AudioContext', UndecodableContext);
+    }
+    await audio.unlock(); await settle();
+    const context = contexts[0];
+    for (const weaponId of WEAPON_SOUND_IDS) {
+      audio.play([{ ...shot, weaponId }]);
+      const source = context.sources.at(-1)!;
+      expect(source.buffer?.label).toBe('synthesized');
+      expect(source.buffer?.data).toEqual(createSyntheticBuffer(context as unknown as AudioContext, `shot-${weaponId}`).getChannelData(0));
+      expect(source.buffer?.data.some(value => Math.abs(value) > .01)).toBe(true);
+    }
+    const weapon = createWeapon('sniper', 'fallback-reload');
+    audio.updateWeaponReloads('me', weapon);
+    for (const progress of [.25, .6, .9]) {
+      weapon.reloadTicks = Math.round(WEAPONS.sniper.reloadTicks * (1 - progress));
+      audio.updateWeaponReloads('me', weapon);
+    }
+    const reloadSources = context.sources.slice(-3);
+    for (const [index, stage] of (['remove', 'insert', 'rack'] as const).entries()) {
+      expect(reloadSources[index].buffer?.data).toEqual(createSyntheticBuffer(context as unknown as AudioContext, `reload-sniper-${stage}`).getChannelData(0));
+    }
+    audio.play([{ ...shot, type: 'dryfire' }]);
+    expect(context.sources.at(-1)?.buffer?.data).toEqual(createSyntheticBuffer(context as unknown as AudioContext, 'dry').getChannelData(0));
+  });
+
+  it('uses fallback during loading and recordings on later triggers without replaying an earlier shot', async () => {
+    const finishLoads: (() => void)[] = [];
+    vi.stubGlobal('fetch', vi.fn((url: string) => new Promise(resolve => finishLoads.push(() => resolve({
+      ok: true, arrayBuffer: async () => new TextEncoder().encode(url).buffer,
+    })))));
+    await audio.unlock();
+    const context = contexts[0];
+    audio.play([shot]);
+    expect(labels(context)).toEqual(['synthesized']);
+    finishLoads.forEach(finish => finish());
+    await settle();
+    expect(context.sources).toHaveLength(1);
+    audio.play([shot]);
+    expect(labels(context).at(-1)).toMatch(/^shot-pistol-[123]\.wav$/);
+    expect(context.sources).toHaveLength(2);
   });
 
   it('uses actual grounded distance: no footsteps at a wall or in air, with crouch quieter and slower', async () => {
@@ -246,7 +317,7 @@ describe('gameplay sound lifecycle and simulation timing', () => {
     audio.setThrust(true);
     audio.play([shot]);
     expect(context.sources).toHaveLength(2);
-    expect(labels(context).at(-1)).toBe('synthesized');
+    expect(labels(context).at(-1)).toMatch(/^shot-pistol-[123]\.wav$/);
     audio.setMuted(true);
     expect(context.gains[0].gain.value).toBe(0);
     audio.updateReload(0.82);
@@ -307,7 +378,7 @@ describe('gameplay sound lifecycle and simulation timing', () => {
     await audio.unlock();
     const context = contexts[0];
     audio.destroy(); audio.destroy();
-    expect(signals).toHaveLength(12);
+    expect(signals).toHaveLength(SAMPLE_NAMES.length);
     expect(signals.every(signal => signal.aborted)).toBe(true);
     finishes.forEach(finish => finish({ ok: true, arrayBuffer: async () => new TextEncoder().encode('late.wav').buffer }));
     await settle();
@@ -359,6 +430,22 @@ describe('gameplay sound lifecycle and simulation timing', () => {
     expect(context.panners.map(panner => panner.pan.value)).toEqual([-.5, .5, 0]);
   });
 
+  it('softens distant gunfire while keeping the local shot unfiltered and full level', async () => {
+    await audio.unlock(); await settle();
+    const context = contexts[0];
+    audio.updateActor('near', { ...standing, x: 100 }, -1, false, [shot], standing);
+    audio.updateActor('far', { ...standing, x: 1200 }, -1, false, [shot], standing);
+    audio.updateActor('local', standing, -1, false, [shot], standing, true);
+    const [near, far, local] = context.sources;
+    const output = (source: Source) => (source.connections[0] as Gain).connections[0];
+    expect(output(near)).toBeInstanceOf(Filter);
+    expect(output(far)).toBeInstanceOf(Filter);
+    expect((output(far) as Filter).frequency.value).toBeLessThan((output(near) as Filter).frequency.value);
+    expect(output(local)).not.toBeInstanceOf(Filter);
+    expect(sourceGain(far)).toBeLessThan(sourceGain(near));
+    expect(sourceGain(near)).toBeLessThan(sourceGain(local));
+  });
+
   it('keeps heartbeat quiet at normal health and stops immediately on recovery, disable or pause', async () => {
     await audio.unlock(); const context = contexts[0];
     audio.setHeartbeat(true, 26); expect(context.sources).toHaveLength(0);
@@ -383,9 +470,97 @@ describe('gameplay sound lifecycle and simulation timing', () => {
     audio.updateWeaponReloads('me', main, offhand); expect(context.sources).toHaveLength(1);
     main.reloadTicks = 0; offhand.reloadTicks = Math.floor(WEAPONS.uzi.reloadTicks * .75);
     audio.updateWeaponReloads('me', main, offhand); expect(context.sources).toHaveLength(2);
-    expect(context.sources[0].buffer?.data[120]).not.toBe(context.sources[1].buffer?.data[120]);
+    expect(labels(context)).toEqual(['reload-pistol-remove.wav', 'reload-uzi-remove.wav']);
     const remote = createWeapon('sniper', 'already-reloading'); remote.reloadTicks = 30;
     audio.updateWeaponReloads('new-player', remote); expect(context.sources).toHaveLength(2);
+  });
+
+  it('does not repeat reload stages after small prediction corrections, pause, or actor removal', async () => {
+    await audio.unlock(); await settle();
+    const context = contexts[0], weapon = createWeapon('m416', 'correction');
+    const update = (progress: number) => {
+      weapon.reloadTicks = progress < 0 ? 0 : Math.max(1, Math.round(WEAPONS.m416.reloadTicks * (1 - progress)));
+      audio.updateWeaponReloads('me', weapon);
+    };
+    update(-1);
+    for (const progress of [0, .25, .6, .58, .61, .54, .6]) update(progress);
+    expect(labels(context)).toEqual(['reload-m416-remove.wav', 'reload-m416-insert.wav']);
+    audio.pause();
+    expect(context.sources.every(source => source.stop.mock.calls.length === 1)).toBe(true);
+    audio.play([shot]);
+    expect(context.sources).toHaveLength(2);
+    await audio.unlock();
+    update(.6); update(.9); update(.84); update(.9);
+    expect(labels(context)).toEqual(['reload-m416-remove.wav', 'reload-m416-insert.wav', 'reload-m416-rack.wav']);
+    update(-1); update(0); update(.25);
+    expect(labels(context).at(-1)).toBe('reload-m416-remove.wav');
+    expect(context.sources).toHaveLength(4);
+    audio.retainActors(new Set());
+    expect(audio.getDiagnostics().reloadTimelines).toBe(0);
+    update(.6);
+    expect(context.sources).toHaveLength(4); // Rejoining midway never catches up missed Foley.
+  });
+
+  it('starts a fresh remote cue ledger on reloadStart when patches skip the inactive interval', async () => {
+    await audio.unlock(); await settle();
+    const context = contexts[0], weapon = createWeapon('m416', 'consecutive-reloads');
+    const start: GameEvent = { type: 'reloadStart', x: 0, y: 0, weaponId: 'm416', instanceId: weapon.instanceId, hand: 'main' };
+    const update = (progress: number, events: GameEvent[] = []) => {
+      weapon.reloadTicks = Math.round(WEAPONS.m416.reloadTicks * (1 - progress));
+      audio.updateActor('remote', { ...standing, weapon }, progress, false, events, standing);
+    };
+    update(0, [start]); update(.25); update(.6); update(.9);
+    update(.05, [start]); update(.25); update(.6); update(.58); update(.9);
+    expect(labels(context)).toEqual(Array(2).fill([
+      'reload-m416-remove.wav', 'reload-m416-insert.wav', 'reload-m416-rack.wav',
+    ]).flat());
+    // A late start event establishes the current baseline without dumping earlier clicks.
+    update(.6, [start]);
+    expect(context.sources).toHaveLength(6);
+    update(.9);
+    expect(labels(context).at(-1)).toBe('reload-m416-rack.wav');
+    expect(context.sources).toHaveLength(7);
+    // Room messages can arrive ahead of schema patches, with the previous .9 still visible.
+    update(.9, [start]); update(.05); update(.25); update(.6); update(.9);
+    expect(labels(context).slice(7)).toEqual([
+      'reload-m416-remove.wav', 'reload-m416-insert.wav', 'reload-m416-rack.wav',
+    ]);
+  });
+
+  it('consumes online reload stages silently while paused instead of playing them on resume', async () => {
+    await audio.unlock(); await settle();
+    const context = contexts[0], weapon = createWeapon('ak47', 'online-pause');
+    const update = (progress: number) => {
+      weapon.reloadTicks = progress < 0 ? 0 : Math.round(WEAPONS.ak47.reloadTicks * (1 - progress));
+      audio.updateActor('remote', { ...standing, weapon }, progress, false, [], standing);
+    };
+    update(-1); update(0); update(.25);
+    expect(labels(context)).toEqual(['reload-ak47-remove.wav']);
+    audio.pause();
+    update(.6);
+    expect(context.sources).toHaveLength(1);
+    await audio.unlock();
+    update(.65); update(.9);
+    expect(labels(context)).toEqual(['reload-ak47-remove.wav', 'reload-ak47-rack.wav']);
+  });
+
+  it('stops a physical weapon’s active reload Foley when reload is cancelled or equipment changes', async () => {
+    await audio.unlock(); await settle();
+    const context = contexts[0], weapon = createWeapon('pistol', 'cancelled');
+    audio.updateWeaponReloads('me', weapon);
+    weapon.reloadTicks = Math.round(WEAPONS.pistol.reloadTicks * .75);
+    audio.updateWeaponReloads('me', weapon);
+    const removed = context.sources[0];
+    weapon.reloadTicks = 0;
+    audio.updateWeaponReloads('me', weapon);
+    expect(removed.stop).toHaveBeenCalledTimes(1);
+    weapon.reloadTicks = Math.round(WEAPONS.pistol.reloadTicks * .4);
+    audio.updateWeaponReloads('me', weapon);
+    const active = context.sources.slice(1);
+    audio.updateWeaponReloads('me', createWeapon('m416', 'replacement'));
+    expect(active.length).toBeGreaterThan(0);
+    expect(active.every(source => source.stop.mock.calls.length === 1)).toBe(true);
+    expect(audio.getDiagnostics().reloadTimelines).toBe(1);
   });
 
   it('does not restart voices when a pending context resume completes after pause', async () => {

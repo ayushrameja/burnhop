@@ -23,7 +23,7 @@ function definition(id: WeaponId, name: string, damage: number, headMultiplier: 
 /** Both authority and prediction import this initial, playtestable balance catalog. */
 export const WEAPONS: Readonly<Record<WeaponId, WeaponDefinition>> = Object.freeze({
   pistol: definition('pistol', 'Pistol', 18, 1.75, 12, 12, 72, 300, 800, .4, 1000, .45, 1.8, .45, 17, true, 1),
-  revolver: definition('revolver', 'Revolver', 42, 2, 6, 30, 132, 500, 1000, .65, 1300, .35, 2, 2.2, 21, false, 1),
+  revolver: definition('revolver', 'Revolver', 42, 2, 6, 30, 132, 500, 1000, .65, 1300, .35, 2, 2.2, 21, true, 1),
   ak47: definition('ak47', 'AK-47', 28, 1.75, 25, 8, 126, 700, 1500, .75, 1900, .6, 3, 1.4, 35, false, 2.5),
   m416: definition('m416', 'M416', 23, 1.75, 30, 7, 114, 800, 1600, .8, 1900, .35, 1.6, .7, 34, false, 2.5),
   uzi: definition('uzi', 'UZI', 15, 1.5, 20, 4, 90, 220, 700, .3, 1000, 1.4, 7, .65, 22, true, 1.5),
@@ -61,6 +61,7 @@ export function equipWeapon(player: PlayerState, incoming: WeaponState, mode: 's
   else player.offhand = weapon;
   player.equipTicks = Math.max(player.equipTicks, WEAPON_HANDLING.equipTicks);
   player.fireHeldLast = false;
+  player.nextShotOffhand = false;
   return dropped;
 }
 /** Dropped weapons use this same clock, so picking up an instance never resets its cooldown. */

@@ -66,7 +66,7 @@ test('Outpost selection loads its real geometry and supports movement, combat, p
   expect(jump.player.thrusting).toBe(false);
   await page.keyboard.up('Space');
   await ticks(page, 2);
-  await page.keyboard.down('Space');
+  await page.keyboard.down('ShiftLeft');
   await ticks(page, 24);
   const flight = await snapshot(page);
   expect(flight.player.thrusting).toBe(true);
@@ -75,7 +75,7 @@ test('Outpost selection loads its real geometry and supports movement, combat, p
   await page.mouse.down();
   await ticks(page, 10);
   await page.mouse.up();
-  await page.keyboard.up('Space');
+  await page.keyboard.up('ShiftLeft');
   expect((await snapshot(page)).shotsFired).toBeGreaterThan(0);
   expect((await snapshot(page)).player.weapon.ammo).toBeLessThan(12);
   await page.keyboard.press('KeyR');

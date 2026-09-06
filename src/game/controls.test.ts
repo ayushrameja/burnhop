@@ -3,6 +3,8 @@ import { actionBindings, bindingLabel, controlHelp, defaultControls, isBinding, 
 
 describe('control settings and binding proposals', () => {
   it('returns independent defaults and normalizes malformed settings without losing valid values', () => {
+    expect(defaultControls()).toMatchObject({ bindings: { crouch: ['KeyC', 'ArrowDown'], punch: ['KeyE', null], pickup: ['KeyF', null], jetpack: ['ShiftLeft', 'ShiftRight'] }, defaultAimMode: 'pointer', jetpackSource: 'separate' });
+    expect(normalizeControls({ defaultAimMode: 'radial', jetpackSource: 'combined' })).toMatchObject({ defaultAimMode: 'radial', jetpackSource: 'combined' });
     const first = defaultControls();
     first.bindings.jump[0] = 'KeyJ';
     first.behavior.fire = 'toggle';
@@ -54,7 +56,7 @@ describe('control settings and binding proposals', () => {
   it('swaps slots within one action without flagging a cross-action conflict', () => {
     const proposal = proposeBinding(defaultControls(), 'crouch', 0, 'ArrowDown');
     expect(proposal.conflict).toBe(false);
-    expect(proposal.controls.bindings.crouch).toEqual(['ArrowDown', 'KeyS']);
+    expect(proposal.controls.bindings.crouch).toEqual(['ArrowDown', 'KeyC']);
     expect(proposal.changes).toHaveLength(2);
   });
 
@@ -76,7 +78,7 @@ describe('control settings and binding proposals', () => {
     const before = structuredClone(controls);
     const proposal = resetActionControls(controls, 'crouch');
     expect(controls).toEqual(before);
-    expect(proposal.controls.bindings.crouch).toEqual(['KeyS', 'ArrowDown']);
+    expect(proposal.controls.bindings.crouch).toEqual(['KeyC', 'ArrowDown']);
     expect(proposal.controls.bindings.fire[0]).toBe('Mouse0');
     expect(proposal.controls.bindings.reload[0]).toBe('KeyR');
     expect(proposal.controls.behavior.crouch).toBe('hold');
@@ -86,6 +88,7 @@ describe('control settings and binding proposals', () => {
 
   it('derives help from current bindings, behavior, aim default, and combined versus split jetpack', () => {
     const controls = defaultControls();
+    controls.jetpackSource = 'combined';
     controls.bindings.jump = ['KeyJ', 'Mouse1'];
     controls.bindings.pause = ['KeyP', null];
     controls.behavior.jetpack = 'toggle';
@@ -97,7 +100,7 @@ describe('control settings and binding proposals', () => {
     expect(help.find(row => row.action === 'jetpack')).toMatchObject({ keys: ['J', 'Middle mouse'], description: 'Release, then tap again for boot thrusters' });
     expect(help.find(row => row.action === 'aimSwitch')?.description).toBe('Toggle for aim line');
     controls.jetpackSource = 'separate';
-    expect(actionBindings(controls, 'jetpack')).toEqual(['KeyW']);
+    expect(actionBindings(controls, 'jetpack')).toEqual(['ShiftLeft', 'ShiftRight']);
     expect(controlHelp(controls).find(row => row.action === 'jetpack')?.description).toBe('Toggle boot thrusters / direct takeoff');
     expect(bindingLabel(null)).toBe('Unbound');
     expect(bindingLabel('Mouse4')).toBe('Mouse forward');

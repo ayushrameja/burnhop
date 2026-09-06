@@ -22,6 +22,7 @@ export interface CharacterPose {
   offhandRecoil?: number;
   /** Cycles of an unarmed dance; used only by the entry illustration. */
   danceBeat?: number;
+  danceStyle?: 'moonwalk' | 'bhangra';
   meleeProgress?: number;
   hit?: boolean;
   target?: boolean;
@@ -37,6 +38,7 @@ export interface CharacterLegGeometry {
   knee: Vec2;
   ankle: Vec2;
   boot: { x: number; y: number; width: number; height: number };
+  bootAngle?: number;
 }
 
 /** Facing-right coordinates, relative to the character's ground contact point. */

@@ -1,4 +1,9 @@
-import type { Vec2 } from './types';
+import type { Vec2, WeaponHand } from './types';
+
+/** Separate shoulder lanes in facing-right artwork space, shared with ballistics. */
+export function getDualWeaponOffset(hand: WeaponHand): Vec2 {
+  return hand === 'main' ? { x: 6, y: 4 } : { x: -12, y: -5 };
+}
 
 /** The approved artwork is authored from planted feet, then uniformly scaled for gameplay. */
 export const STANDING_COLLISION_HEIGHT = 68;

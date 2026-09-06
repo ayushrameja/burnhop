@@ -3,14 +3,31 @@ import { SETTINGS_STORAGE_KEY } from '../src/game/settings';
 import { enterMenu, enterPractice, installCapture, openMenu } from './helpers/capture';
 
 interface AudioSnapshot {
-  tracks: { id: number; paused: boolean; muted: boolean; loop: boolean; volume: number; currentTime: number; duration: number }[];
+  tracks: { id: number; src?: string; paused: boolean; muted: boolean; loop: boolean; volume: number; currentTime: number; duration: number }[];
   tones: number;
 }
 
-/** Observe the actual synthesized loop and native Web Audio playback without replacing them. */
+/** Observe native media playback and UI audio without replacing their behavior. */
 async function observeAudio(page: Page) {
   await page.addInitScript(() => {
-    const tracks = new Map<AudioBuffer, AudioSnapshot['tracks'][number]>();
+    const tracks = new Map<AudioBuffer | HTMLAudioElement, AudioSnapshot['tracks'][number]>();
+    const NativeAudio = window.Audio;
+    window.Audio = class extends NativeAudio {
+      constructor(src?: string) {
+        super(src);
+        const music = this;
+        tracks.set(music, {
+          id: 1000 + tracks.size,
+          get src() { return music.src; },
+          get paused() { return music.paused; },
+          get muted() { return music.muted; },
+          get loop() { return music.loop; },
+          get volume() { return music.volume; },
+          get currentTime() { return music.currentTime; },
+          get duration() { return music.duration; },
+        });
+      }
+    };
     const identities = new Map<AudioBuffer, number>();
     let tones = 0;
     const createSource = AudioContext.prototype.createBufferSource;
@@ -39,6 +56,11 @@ async function observeAudio(page: Page) {
       };
       source.stop = (when?: number) => { stoppedTime = context.currentTime; stopped = true; stop(when); };
       return source;
+    };
+    (window as Window & { __SEEK_MENU_END__?: () => void }).__SEEK_MENU_END__ = () => {
+      for (const track of tracks.keys()) {
+        if (track instanceof HTMLAudioElement && !track.paused && Number.isFinite(track.duration)) track.currentTime = track.duration - 0.5;
+      }
     };
     const createOscillator = AudioContext.prototype.createOscillator;
     AudioContext.prototype.createOscillator = function () {
@@ -82,7 +104,7 @@ test.beforeEach(async ({ page }) => {
   await observeAudio(page);
 });
 
-test('branded entry remains silent until sound is enabled and carries the same groove into the menu', async ({ page }, testInfo) => {
+test('entry unlocks lo-fi music and switches to a distinct lobby track without overlap', async ({ page }, testInfo) => {
   await page.goto('/');
   const gate = page.getByTestId('fullscreen-gate');
   await expect(gate.getByRole('heading', { name: 'BURNHOP' })).toBeVisible();
@@ -95,10 +117,11 @@ test('branded entry remains silent until sound is enabled and carries the same g
   await page.screenshot({ path: testInfo.outputPath('branded-entry.png') });
   await gate.getByRole('button', { name: 'Enter game', exact: true }).click();
   await expectMusic(page, true);
-  expect((await playingTracks(page))[0].id).toBe(groove.id);
+  expect(groove.src).toContain('moonwalk-at-sundown.mp3');
+  await expect.poll(async () => (await playingTracks(page))[0]?.src).toContain('hangar-bhangra.mp3');
 });
 
-test('original groove loops at 10%, carries through entry, and stops for gameplay, pause and hidden pages', async ({ page }, testInfo) => {
+test('lobby song loops at 10% and stops for gameplay, pause and hidden pages', async ({ page }, testInfo) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
@@ -111,9 +134,10 @@ test('original groove loops at 10%, carries through entry, and stops for gamepla
   const original = (await playingTracks(page))[0];
   await page.screenshot({ path: testInfo.outputPath('audio-menu.png') });
 
-  // One short sixteen-beat phrase is enough to verify an actual native loop wrap.
-  await expect.poll(async () => (await playingTracks(page))[0]?.currentTime ?? 0, { timeout: 10000, intervals: [100] }).toBeGreaterThan(original.duration - 0.4);
-  await expect.poll(async () => (await playingTracks(page))[0]?.currentTime ?? original.duration, { timeout: 2000, intervals: [100] }).toBeLessThan(0.4);
+  // Seek near the end, then observe a real native loop wrap of the full song.
+  await page.evaluate(() => (window as Window & { __SEEK_MENU_END__?: () => void }).__SEEK_MENU_END__!());
+  await expect.poll(async () => (await playingTracks(page))[0]?.currentTime ?? 0).toBeGreaterThan(original.duration - 1);
+  await expect.poll(async () => (await playingTracks(page))[0]?.currentTime ?? original.duration, { timeout: 4000, intervals: [100] }).toBeLessThan(1);
   await expectMusic(page, true);
 
   await page.getByRole('button', { name: 'Settings & Controls', exact: true }).click();

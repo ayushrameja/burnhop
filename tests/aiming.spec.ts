@@ -3,9 +3,16 @@ import { choosePracticeLoadout, cycleViewTo } from './helpers/combat';
 import { test, expect, type Page } from '@playwright/test';
 import { CONFIG, getWeaponOrigin } from '../src/game/simulation';
 import { AIM_DASH_DISTANCE, AIM_DASH_LENGTH } from '../src/game/aim';
+import { defaultSettings, SETTINGS_STORAGE_KEY } from '../src/game/settings';
 import type { Vec2 } from '../src/game/types';
 
-test.beforeEach(async ({ page }) => { await installCapture(page); });
+test.beforeEach(async ({ page }) => {
+  await installCapture(page);
+  // These scenarios explicitly exercise radial-first aiming and its pointer alternate.
+  const settings = defaultSettings(false);
+  settings.controls.defaultAimMode = 'radial';
+  await page.addInitScript(({ key, settings }) => { localStorage.setItem(key, JSON.stringify(settings)); }, { key: SETTINGS_STORAGE_KEY, settings });
+});
 
 async function enter(page: Page) {
   await openMenu(page);

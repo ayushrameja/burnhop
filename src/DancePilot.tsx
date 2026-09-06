@@ -1,10 +1,10 @@
 import { useEffect, useRef } from 'react';
 import type { DetailedAppearance } from './game/appearance';
 import { drawDancingCharacter } from './game/detailedCharacter';
-import { DANCE_BEATS, DANCE_BPM } from './game/audioSynthesis';
+import { MENU_MUSIC, type MenuMusicScene } from './game/menuMusic';
 
-export function danceBeat(seconds: number, reducedMotion = false): number {
-  return reducedMotion ? 2.25 : ((Math.max(0, seconds) * DANCE_BPM / 60) % DANCE_BEATS);
+export function danceBeat(seconds: number, reducedMotion = false, scene: MenuMusicScene = 'lobby'): number {
+  return reducedMotion ? 2.25 : ((Math.max(0, seconds) * MENU_MUSIC[scene].bpm / 60) % 16);
 }
 
 /** One shared procedural pilot; no downloaded video, decoded sprites or gameplay simulation. */
@@ -23,7 +23,7 @@ export default function DancePilot({ appearance, reducedMotion, getDanceTime }: 
       const compact = width < 700;
       const x = width * (compact ? .53 : .745), y = height * (compact ? .49 : .8);
       const scale = Math.min(height / (compact ? 215 : 150), width / (compact ? 135 : 180));
-      const beat = danceBeat(getDanceTime() ?? elapsed / 1000, reducedMotion);
+      const beat = danceBeat(getDanceTime() ?? elapsed / 1000, reducedMotion, 'entry');
       const shadow = context.createRadialGradient(x, y, 2, x, y, scale * 38);
       shadow.addColorStop(0, '#03080cab'); shadow.addColorStop(1, '#03080c00');
       context.save(); context.translate(x, y); context.scale(1, .18); context.fillStyle = shadow;
@@ -38,7 +38,7 @@ export default function DancePilot({ appearance, reducedMotion, getDanceTime }: 
       }
       context.fillStyle = '#76e1e2'; context.globalAlpha = reducedMotion ? .65 : .5 + Math.max(0, Math.cos(beat * Math.PI * 2)) * .5;
       context.fillRect(11, 1.6, 1.5, 1); context.restore();
-      drawDancingCharacter(context, x, y, scale, appearance, beat, reducedMotion);
+      drawDancingCharacter(context, x, y, scale, appearance, beat, reducedMotion, 'moonwalk');
     };
     const resize = () => {
       const bounds = canvas.getBoundingClientRect(); width = bounds.width; height = bounds.height;

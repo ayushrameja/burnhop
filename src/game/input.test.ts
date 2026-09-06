@@ -22,10 +22,15 @@ function airborne(map = arena) {
 describe('action input', () => {
   it('uses physical aliases independently for Hold and ignores repeated presses', () => {
     const input = new ActionInput();
-    expect(input.press('KeyS')).toEqual(['crouch']);
-    expect(input.press('KeyS')).toEqual([]);
+    expect(input.aimMode).toBe('pointer');
+    expect(input.actionsFor('KeyE')).toEqual(['punch']);
+    expect(input.actionsFor('KeyF')).toEqual(['pickup']);
+    expect(input.actionsFor('ShiftLeft')).toEqual(['jetpack']);
+    expect(input.actionsFor('ShiftRight')).toEqual(['jetpack']);
+    expect(input.press('KeyC')).toEqual(['crouch']);
+    expect(input.press('KeyC')).toEqual([]);
     input.press('ArrowDown');
-    input.release('KeyS');
+    input.release('KeyC');
     expect(input.consumeTick().crouchHeld).toBe(true);
     input.release('ArrowDown');
     expect(input.consumeTick().crouchHeld).toBe(false);
@@ -40,8 +45,8 @@ describe('action input', () => {
     const input = new ActionInput();
     input.press('Space');
     input.press('KeyR');
-    expect(input.consumeTick()).toMatchObject({ jumpPressed: true, jumpHeld: true, reloadPressed: true, jetpack: { pressed: true, held: true } });
-    expect(input.consumeTick()).toMatchObject({ jumpPressed: false, jumpHeld: true, reloadPressed: false, jetpack: { pressed: false, held: true } });
+    expect(input.consumeTick()).toMatchObject({ jumpPressed: true, jumpHeld: true, reloadPressed: true, jetpack: { pressed: false, held: false } });
+    expect(input.consumeTick()).toMatchObject({ jumpPressed: false, jumpHeld: true, reloadPressed: false, jetpack: { pressed: false, held: false } });
     expect(input.press('Space')).toEqual([]);
     input.release('Space');
     input.press('Space');
@@ -105,12 +110,13 @@ describe('action input', () => {
 
   it('supports mouse and keyboard remaps while keeping Escape available and combined jet bindings inactive', () => {
     const controls = defaultControls();
+    controls.jetpackSource = 'combined';
     controls.bindings.jump = ['Mouse1', 'KeyJ'];
     controls.bindings.fire = ['KeyF', null];
     controls.bindings.pause = ['KeyP', null];
     const input = new ActionInput(controls);
     expect(input.isBound('Space')).toBe(false);
-    expect(input.isBound('KeyW')).toBe(false);
+    expect(input.isBound('ShiftLeft')).toBe(false);
     expect(input.actionsFor('Escape')).toEqual(['pause']);
     expect(input.actionsFor('KeyP')).toEqual(['pause']);
     input.press('Mouse1');
@@ -126,22 +132,23 @@ describe('action input', () => {
     controls.jetpackSource = 'separate';
     controls.behavior = { movement: 'toggle', crouch: 'toggle', jetpack: 'toggle', fire: 'toggle', aimSwitch: 'toggle' };
     const input = new ActionInput(controls);
-    for (const binding of ['KeyA', 'KeyS', 'KeyW', 'Mouse0', 'Mouse2', 'Space', 'KeyR']) input.press(binding);
+    for (const binding of ['KeyA', 'KeyC', 'ShiftLeft', 'Mouse0', 'Mouse2', 'Space', 'KeyR']) input.press(binding);
     if (reset === 'clear') input.clear();
     else input.configure(controls);
     expect(input.snapshot()).toMatchObject({
       moveX: 0, jumpPressed: false, jumpHeld: false, crouchHeld: false, fireHeld: false,
       reloadPressed: false, jetpack: { pressed: false, held: false },
     });
-    expect(input.aimMode).toBe('radial');
+    expect(input.aimMode).toBe('pointer');
     expect(input.press('KeyA')).toEqual(['moveLeft']);
     expect(input.snapshot().moveX).toBe(-1);
   });
 });
 
 describe('action input and simulation', () => {
+  const combinedControls = (): ReturnType<typeof defaultControls> => ({ ...defaultControls(), jetpackSource: 'combined' as const });
   it('preserves combined Hold jump, fresh airborne activation, and release to cut thrust', () => {
-    const input = new ActionInput(), world = createWorld(arena);
+    const input = new ActionInput(combinedControls()), world = createWorld(arena);
     input.press('Space');
     expect(tick(input, world).map(event => event.type)).toEqual(['jump']);
     for (let frame = 0; frame < 8; frame++) tick(input, world);
@@ -158,7 +165,7 @@ describe('action input and simulation', () => {
   });
 
   it('clears combined Toggle intent after the first jump, keeps fresh airborne thrust on release, and turns off without hopping', () => {
-    const controls = defaultControls();
+    const controls = combinedControls();
     controls.behavior.jetpack = 'toggle';
     const input = new ActionInput(controls), world = createWorld(arena);
     input.press('Space');
@@ -184,7 +191,7 @@ describe('action input and simulation', () => {
   });
 
   it.each(['hold', 'toggle'] as const)('preserves the combined %s buffered hop after physical release and clears its thrust intent on jumping', behavior => {
-    const controls = defaultControls();
+    const controls = combinedControls();
     controls.behavior.jetpack = behavior;
     const input = new ActionInput(controls), world = airborne();
     Object.assign(world.player, { y: arena.floorY - CONFIG.bodyHeight - 50, vy: 360 });
@@ -201,7 +208,7 @@ describe('action input and simulation', () => {
 
   it.each(['hold', 'toggle'] as const)('uses only remaining %s intent when steering misses a buffered landing after release', behavior => {
     const map = { ...arena, platforms: [{ x: 100, y: 500, width: 60, height: 20 }] };
-    const controls = defaultControls();
+    const controls = combinedControls();
     controls.behavior.jetpack = behavior;
     const input = new ActionInput(controls), world = airborne(map);
     Object.assign(world.player, { x: 155, y: 380, vy: 360 });
@@ -216,7 +223,7 @@ describe('action input and simulation', () => {
   });
 
   it('keeps a queued hop when toggled off before landing without reissuing the jump press', () => {
-    const controls = defaultControls();
+    const controls = combinedControls();
     controls.behavior.jetpack = 'toggle';
     const input = new ActionInput(controls), world = airborne();
     Object.assign(world.player, { y: arena.floorY - CONFIG.bodyHeight - 50, vy: 360 });
@@ -232,15 +239,15 @@ describe('action input and simulation', () => {
   });
 
   it('supports split Toggle ground takeoff and resets on landing until the next fresh press', () => {
-    const controls = defaultControls();
+    const controls = combinedControls();
     controls.jetpackSource = 'separate';
     controls.behavior.jetpack = 'toggle';
     const input = new ActionInput(controls), world = createWorld(arena);
-    input.press('KeyW');
+    input.press('ShiftLeft');
     expect(tick(input, world)).toEqual([]);
     expect(world.player.thrusting).toBe(true);
     expect(world.player.grounded).toBe(false);
-    input.release('KeyW');
+    input.release('ShiftLeft');
     tick(input, world);
     expect(world.player.thrusting).toBe(true);
     Object.assign(world.player, { y: arena.floorY - CONFIG.bodyHeight - 1, vy: 400 });
@@ -248,18 +255,18 @@ describe('action input and simulation', () => {
     expect(input.active('jetpack')).toBe(false);
     tick(input, world);
     expect(world.player.grounded).toBe(true);
-    input.press('KeyW');
+    input.press('ShiftLeft');
     tick(input, world);
     expect(world.player.thrusting).toBe(true);
   });
 
   it.each(['combined', 'separate'] as const)('resets %s Toggle on empty fuel and requires a new press after regeneration', source => {
-    const controls = defaultControls();
+    const controls = combinedControls();
     controls.jetpackSource = source;
     controls.behavior.jetpack = 'toggle';
     const map = { ...arena, height: 10000, floorY: 9880, platforms: [] };
     const input = new ActionInput(controls), world = airborne(map);
-    const binding = source === 'combined' ? 'Space' : 'KeyW';
+    const binding = source === 'combined' ? 'Space' : 'ShiftLeft';
     world.player.fuel = CONFIG.fuelDrain * CONFIG.fixedDt / 2;
     input.press(binding);
     tick(input, world, map);

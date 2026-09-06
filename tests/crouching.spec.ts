@@ -56,7 +56,7 @@ test('both crouch keys preserve planted feet and clear after release, blur, and 
   expect(standing.crouchAmount).toBe(0);
   expect(standing.height).toBe(CONFIG.bodyHeight);
 
-  await page.keyboard.down('KeyS');
+  await page.keyboard.down('KeyC');
   await stance(page, 1);
   const crouched = (await snapshot(page)).player;
   expect(crouched.height).toBeCloseTo(CROUCH_COLLISION_HEIGHT, 6);
@@ -66,7 +66,7 @@ test('both crouch keys preserve planted feet and clear after release, blur, and 
 
   // Releasing either alias must leave the other independently held key active.
   await page.keyboard.down('ArrowDown');
-  await page.keyboard.up('KeyS');
+  await page.keyboard.up('KeyC');
   await ticks(page, 18);
   expect((await snapshot(page)).player.crouchAmount).toBe(1);
   await page.keyboard.up('ArrowDown');
@@ -75,7 +75,7 @@ test('both crouch keys preserve planted feet and clear after release, blur, and 
 
   await page.keyboard.down('ArrowDown');
   await stance(page, 1);
-  await page.keyboard.down('KeyS');
+  await page.keyboard.down('KeyC');
   await page.keyboard.up('ArrowDown');
   await ticks(page, 18);
   expect((await snapshot(page)).player.crouchAmount).toBe(1);
@@ -87,7 +87,7 @@ test('both crouch keys preserve planted feet and clear after release, blur, and 
   expect(await page.evaluate(() => window.__BURNHOP__!.metrics().running)).toBe(false);
   await page.getByRole('button', { name: 'Resume', exact: true }).click();
   await stance(page, 0);
-  await page.keyboard.up('KeyS');
+  await page.keyboard.up('KeyC');
   expect((await snapshot(page)).player.y + (await snapshot(page)).player.height).toBeCloseTo(feetY, 6);
 
   await page.keyboard.down('ArrowDown');
@@ -112,7 +112,7 @@ test('crouch walking slows the player while firing and aiming stay aligned with 
   await cycleViewTo(page, 2.5);
   await expect(page.getByTestId('zoom-level')).toContainText('2.5x');
   const standingOrigin = await checkStationaryOrigin(page);
-  await page.keyboard.down('KeyS');
+  await page.keyboard.down('KeyC');
   await stance(page, 1);
   const crouchOrigin = await checkStationaryOrigin(page);
   expect(crouchOrigin.y).toBeGreaterThan(standingOrigin.y + 10);
@@ -141,7 +141,7 @@ test('crouch walking slows the player while firing and aiming stay aligned with 
   await page.keyboard.up('KeyD');
   await page.waitForFunction(() => Math.abs(window.__BURNHOP__!.snapshot().player.vx) < 0.01);
   await checkStationaryOrigin(page);
-  await page.keyboard.up('KeyS');
+  await page.keyboard.up('KeyC');
   await stance(page, 0);
   await checkStationaryOrigin(page);
 });
@@ -156,13 +156,13 @@ test('a low ceiling prevents standing until crouch walking clears its edge', asy
     body: JSON.stringify({ ...arena, platforms: [roof], targetSpawn: { x: 1200, y: arena.floorY - CONFIG.bodyHeight } }),
   }));
   await enter(page);
-  await page.keyboard.down('KeyS');
+  await page.keyboard.down('KeyC');
   await stance(page, 1);
   await page.keyboard.down('KeyD');
   await page.waitForFunction(() => window.__BURNHOP__!.snapshot().player.x >= 660);
   await page.keyboard.up('KeyD');
   await page.waitForFunction(() => Math.abs(window.__BURNHOP__!.snapshot().player.vx) < 0.01);
-  await page.keyboard.up('KeyS');
+  await page.keyboard.up('KeyC');
   await ticks(page, 24);
   const blocked = (await snapshot(page)).player;
   expect(blocked.x).toBeGreaterThan(roof.x);
@@ -184,9 +184,9 @@ test('a low ceiling prevents standing until crouch walking clears its edge', asy
   expect(clear.y + clear.height).toBeCloseTo(arena.floorY, 6);
 });
 
-test('jump and second-press thrust override held crouch in the air and restore it on landing', async ({ page }) => {
+test('jump and Shift thrust override held crouch in the air and restore it on landing', async ({ page }) => {
   await enter(page);
-  await page.keyboard.down('KeyS');
+  await page.keyboard.down('KeyC');
   await stance(page, 1);
   const feetY = (await snapshot(page)).player.y + (await snapshot(page)).player.height;
   await page.keyboard.press('Space');
@@ -204,15 +204,15 @@ test('jump and second-press thrust override held crouch in the air and restore i
   expect(jumping.fuel).toBe(CONFIG.maxFuel);
   expect(jumping.thrusting).toBe(false);
 
-  await page.keyboard.down('Space');
+  await page.keyboard.down('ShiftLeft');
   await page.waitForFunction(() => {
     const player = window.__BURNHOP__!.snapshot().player;
     return player.thrusting && player.fuel < 99 && player.crouchAmount === 0;
   });
   await page.screenshot({ path: `${screenshots}/32-gameplay-crouch-to-flight.png` });
-  await page.keyboard.up('Space');
+  await page.keyboard.up('ShiftLeft');
   await stance(page, 1);
   expect((await snapshot(page)).player.thrusting).toBe(false);
-  await page.keyboard.up('KeyS');
+  await page.keyboard.up('KeyC');
   await stance(page, 0);
 });

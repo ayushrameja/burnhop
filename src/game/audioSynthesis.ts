@@ -30,6 +30,11 @@ export function createSyntheticBuffer(context: AudioContext, sound: SyntheticSou
   const buffer = context.createBuffer(1, Math.ceil(duration * sampleRate), sampleRate);
   const data = buffer.getChannelData(0);
   let seed = Array.from(sound).reduce((sum, char) => Math.imul(sum ^ char.charCodeAt(0), 16777619), 0x45d9f3b), low = 0, bootLow = 0, bootSub = 0;
+  let pressure = 0, sub = 0, crackLow = 0;
+  const profile = weapon ?? (handling ? SHOT_PROFILES[handling[1] as WeaponSoundId] : undefined);
+  const pressureMix = 1 - Math.exp(-2 * Math.PI * (profile ? profile.body * 4 : 680) / sampleRate);
+  const subMix = 1 - Math.exp(-2 * Math.PI * 65 / sampleRate);
+  const crackMix = 1 - Math.exp(-2 * Math.PI * (profile?.ring ?? 2100) / sampleRate);
   const bootLowMix = 1 - Math.exp(-2 * Math.PI * 680 / sampleRate);
   const bootSubMix = 1 - Math.exp(-2 * Math.PI * 90 / sampleRate);
   const noise = () => {
@@ -47,11 +52,15 @@ export function createSyntheticBuffer(context: AudioContext, sound: SyntheticSou
       const engine = Math.sin(time * Math.PI * 88) * 0.055 + Math.sin(time * Math.PI * 176) * 0.018;
       value = white * 0.24 + low * 1.8 + engine;
     } else if (weapon) {
-      const attack = white * Math.exp(-time * (weapon.decay * 2.3));
-      const body = Math.sin(2 * Math.PI * (weapon.body * time + 1.8 * (1 - Math.exp(-time * 45)))) * Math.exp(-time * weapon.decay);
-      const bolt = Math.sin(time * Math.PI * weapon.ring) * Math.exp(-Math.max(0, time - .025) * 95) * (time > .025 ? .07 : 0);
-      const tail = low * Math.exp(-time * weapon.decay * .48) * 1.2;
-      value = attack * weapon.crack + body * .38 + tail + bolt;
+      // Broadband pressure and a dry action, without the old pitched laser/kick sweep.
+      pressure += (white - pressure) * pressureMix;
+      sub += (pressure - sub) * subMix;
+      crackLow += (white - crackLow) * crackMix;
+      const attack = (white - crackLow) * Math.exp(-time * weapon.decay * 3.5);
+      const body = (pressure - sub) * Math.exp(-time * weapon.decay) * 2.6;
+      const bolt = time < .027 ? 0 : (white - pressure) * Math.exp(-(time - .027) * 130) * .09;
+      const tail = low * Math.exp(-time * weapon.decay * .6) * .9;
+      value = attack * weapon.crack + body + tail + bolt;
     } else if (sound === 'heartbeat') {
       const pulse = (start: number, gain: number) => time < start ? 0 :
         Math.sin((time - start) * Math.PI * 116) * Math.exp(-(time - start) * 32) * gain;
@@ -90,11 +99,19 @@ export function createSyntheticBuffer(context: AudioContext, sound: SyntheticSou
     } else if (sound === 'footstep') {
       const body = Math.sin(time * Math.PI * 175) * Math.exp(-time * 55);
       value = body * 0.55 + low * Math.exp(-time * 35) * 1.8 + white * Math.exp(-time * 60) * 0.12;
+    } else if (handling) {
+      pressure += (white - pressure) * pressureMix;
+      crackLow += (white - crackLow) * crackMix;
+      const stage = handling[2];
+      const contact = (start: number, decay: number) => time < start ? 0
+        : Math.min(1, (time - start) / .001) * Math.exp(-(time - start) * decay);
+      const clack = contact(0, 95) + contact(stage === 'rack' ? .075 : .034, 125) * (stage === 'rack' ? .8 : .3);
+      const scrape = stage === 'rack' ? contact(.017, 32) * .24 : contact(.006, 65) * .12;
+      value = (white - crackLow) * clack * .46 + pressure * clack * 1.8 + (white - pressure) * scrape;
     } else {
-      const rack = sound === 'rack' || handling?.[2] === 'rack';
+      const rack = sound === 'rack';
       const transient = Math.exp(-time * 105) + (rack && time > 0.08 ? Math.exp(-(time - 0.08) * 120) * 0.85 : 0);
-      const tint = handling ? SHOT_PROFILES[handling[1] as WeaponSoundId].body / 140 : 1;
-      const ring = Math.sin(time * Math.PI * 2750 * tint) + Math.sin(time * Math.PI * 4210 * tint) * 0.35;
+      const ring = Math.sin(time * Math.PI * 2750) + Math.sin(time * Math.PI * 4210) * 0.35;
       value = white * transient * 0.5 + ring * transient * 0.14 + low * Math.exp(-time * (rack ? 16 : 50)) * 0.8;
     }
     if (sound !== 'jet') value *= Math.min(1, time / 0.0015) * Math.min(1, Math.max(0, (duration - time) / 0.012));

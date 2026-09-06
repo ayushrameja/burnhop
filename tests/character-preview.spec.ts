@@ -307,9 +307,9 @@ test('preview fits narrow screens and returns to unchanged menu, crouch preview,
   await page.getByRole('button', { name: 'Back to menu', exact: true }).click();
   await page.getByRole('button', { name: 'Enter practice', exact: true }).click();
   await page.waitForFunction(() => window.__BURNHOP__?.metrics().running);
-  await page.keyboard.down('KeyS');
+  await page.keyboard.down('KeyC');
   await page.waitForFunction(() => window.__BURNHOP__!.snapshot().player.crouchAmount === 1);
-  await page.keyboard.up('KeyS');
+  await page.keyboard.up('KeyC');
   await page.waitForFunction(() => window.__BURNHOP__!.snapshot().player.crouchAmount === 0);
   await page.keyboard.press('Space');
   await page.waitForFunction(() => !window.__BURNHOP__!.snapshot().player.grounded);

@@ -162,6 +162,35 @@ describe('deterministic per-instance firing', () => {
     expect(events.filter(e => e.type === 'shot').map(e => e.hand)).toEqual(['offhand', 'offhand', 'offhand']);
     expect(events.filter(e => e.type === 'dryfire')).toHaveLength(1);
   });
+  it.each(['pistol', 'revolver', 'uzi', 'ump'] as const)('alternates six separated taps with paired %s weapons', id => {
+    const player = actor(id); player.offhand = createWeapon(id, 'other');
+    const hands: string[] = [];
+    for (let tap = 0; tap < 6; tap++) {
+      const shots = step(player, { fireHeld: true }).filter(e => e.type === 'shot');
+      expect(shots).toHaveLength(1); hands.push(shots[0].hand);
+      run(player, 60);
+    }
+    expect(hands).toEqual(['main', 'offhand', 'main', 'offhand', 'main', 'offhand']);
+  });
+  it('keeps tap order through a snapshot and does not bypass either cooldown on rapid clicks', () => {
+    const player = actor('pistol'); player.offhand = createWeapon('pistol', 'other');
+    step(player, { fireHeld: true });
+    const copy = cloneActor(player);
+    for (let tick = 0; tick < 45; tick++) {
+      const command = { fireHeld: tick % 2 === 1 };
+      expect(step(copy, command)).toEqual(step(player, command));
+    }
+    expect(player.weapon.shotCounter).toBeLessThanOrEqual(3);
+    expect(player.offhand.shotCounter).toBeGreaterThan(0);
+    expect(player.offhand.shotCounter).toBeLessThanOrEqual(3);
+  });
+  it('fires the available hand if the next hand is cooling or empty', () => {
+    const player = actor('pistol'); player.offhand = createWeapon('revolver', 'other');
+    player.nextShotOffhand = true; player.offhand.cooldownTicks = 45;
+    expect(step(player, { fireHeld: true }).find(e => e.type === 'shot')?.hand).toBe('main');
+    run(player, 60); player.offhand.ammo = 0;
+    expect(step(player, { fireHeld: true }).find(e => e.type === 'shot')?.hand).toBe('main');
+  });
 });
 
 describe('reload and equipment instance ownership', () => {

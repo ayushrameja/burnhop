@@ -1,5 +1,5 @@
 import { compileTerrain, moveAndCollide, raySolidDistance, rectOverlapsSolid, type CollisionSolid } from './collision';
-import { CHARACTER_SCALE, CROUCH_TRANSITION_SECONDS, getStanceHeight, getStanceWeaponOffset, STANDING_COLLISION_HEIGHT } from './stance';
+import { CHARACTER_SCALE, CROUCH_TRANSITION_SECONDS, getDualWeaponOffset, getStanceHeight, getStanceWeaponOffset, STANDING_COLLISION_HEIGHT } from './stance';
 import type { Arena, GameEvent, InputCommand, PlayerState, ShotEvent, Vec2, WeaponHand, WeaponState, WorldState } from './types';
 import { calculateDamage, isCloserHit, rayHitRegions, resolveMeleeTarget } from './combat';
 import { advanceWeaponTimers, cancelReload, cloneWeapon, createWeapon, DUAL_CONFIG, equippedWeapons, MELEE_CONFIG, WEAPON_HANDLING, WEAPONS, weaponRandom } from './weapons';
@@ -48,7 +48,7 @@ export function createWorld(arena: Arena): WorldState {
       aimAngle: 0, crouchAmount: 0, health: CONFIG.maxHealth, fuel: CONFIG.maxFuel,
       thrusting: false, thrustLatched: false, fuelDelayTicks: 0,
       weapon: createWeapon('pistol', 'initial:player:pistol'), offhand: null,
-      equipTicks: 0, fireLockTicks: 0, fireHeldLast: false,
+      equipTicks: 0, fireLockTicks: 0, fireHeldLast: false, nextShotOffhand: false,
       meleeWindupTicks: 0, meleeCooldownTicks: 0, meleeAimAngle: 0, meleeSequence: 0, impulseX: 0, impulseY: 0,
     },
     target: {
@@ -78,8 +78,11 @@ export function releaseActorInput(player: PlayerState): void {
 }
 
 export function getWeaponOrigin(player: PlayerState, hand: WeaponHand = 'main'): Vec2 {
-  const offset = getStanceWeaponOffset(player.crouchAmount, Math.cos(player.aimAngle) >= 0 ? 1 : -1);
-  return { x: player.x + player.width / 2 + offset.x, y: player.y + player.height + offset.y + (hand === 'offhand' ? 7 * CHARACTER_SCALE : 0) };
+  const facing = Math.cos(player.aimAngle) >= 0 ? 1 : -1;
+  const offset = getStanceWeaponOffset(player.crouchAmount, facing);
+  const dual = player.offhand ? getDualWeaponOffset(hand) : { x: 0, y: 0 };
+  return { x: player.x + player.width / 2 + offset.x + dual.x * CHARACTER_SCALE * facing,
+    y: player.y + player.height + offset.y + dual.y * CHARACTER_SCALE };
 }
 
 export function getMuzzlePosition(player: PlayerState, hand: WeaponHand = 'main'): Vec2 {
@@ -415,18 +418,31 @@ function advanceCombat(player: PlayerState, command: ActorInput, events: GameEve
   const canFire = active && command.fireHeld && player.equipTicks === 0 && player.fireLockTicks === 0
     && !equippedWeapons(player).some(({ weapon }) => weapon.reloadTicks > 0 || weapon.reloadQueued);
   if (canFire) {
-    if (!player.fireHeldLast && player.offhand && player.weapon.ammo > 0 && player.offhand.ammo > 0) {
-      const interval = Math.min(WEAPONS[player.weapon.weaponId].cooldownTicks, WEAPONS[player.offhand.weaponId].cooldownTicks)
-        * DUAL_CONFIG.cooldownMultiplier;
-      player.offhand.cooldownTicks = Math.max(player.offhand.cooldownTicks, Math.floor(interval / 2));
+    let hands = equippedWeapons(player);
+    const ready = ({ weapon }: typeof hands[number]) => weapon.cooldownTicks === 0 && weapon.ammo > 0;
+    if (!player.fireHeldLast && player.offhand) {
+      // A tap fires one ready hand, remembering the other for the next tap.
+      // Only an actual shot starts the stagger; empty/cooling hands cannot starve their partner.
+      const preferred = hands[player.nextShotOffhand ? 1 : 0];
+      const first = ready(preferred) ? preferred : hands.find(ready);
+      if (first) {
+        const other = hands.find(entry => entry.hand !== first.hand)!;
+        const interval = Math.min(WEAPONS[first.weapon.weaponId].cooldownTicks, WEAPONS[other.weapon.weaponId].cooldownTicks)
+          * DUAL_CONFIG.cooldownMultiplier;
+        other.weapon.cooldownTicks = Math.max(other.weapon.cooldownTicks, Math.floor(interval / 2));
+        hands = [first, other];
+      }
     }
-    for (const { hand, weapon } of equippedWeapons(player)) {
-      if (weapon.cooldownTicks === 0 && weapon.ammo > 0) events.push(fireShot(player, hand, weapon, solids));
+    for (const { hand, weapon } of hands) {
+      if (weapon.cooldownTicks === 0 && weapon.ammo > 0) {
+        events.push(fireShot(player, hand, weapon, solids));
+        player.nextShotOffhand = hand === 'main';
+      }
       else if (!player.fireHeldLast && weapon.ammo === 0) events.push({ type: 'dryfire', ...getWeaponOrigin(player, hand),
         weaponId: weapon.weaponId, hand, instanceId: weapon.instanceId });
     }
   }
-  // A held trigger resumes with a fresh stagger after any complete equipment/reload/melee lock.
+  // Releasing or locking the trigger keeps the next hand, including across reloads and pause.
   player.fireHeldLast = canFire;
 }
 

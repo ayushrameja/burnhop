@@ -7,12 +7,12 @@ const shape = (color: string, ...points: number[]): Shape => ({ color, points })
 
 /** All seven drawings share material values and outline weight; lengths match combat muzzles. */
 export const WEAPON_ARTWORK: Readonly<Record<WeaponId, WeaponArtwork>> = {
-  pistol: { trigger: {x:5,y:4}, support:{x:8,y:5}, muzzle:{x:17,y:0}, magazine:{x:4,y:8}, shapes:[
+  pistol: { trigger: {x:2,y:6}, support:{x:3.5,y:8}, muzzle:{x:17,y:0}, magazine:{x:4,y:8}, shapes:[
     shape(dark,0,-4,14,-4,17,-2,17,2,8,2,5,12,-1,11,2,2,-2,2,-2,-2),
     shape(steel,-1,-4,14,-4,16,-2,16,0,-1,0), shape(light,1,-5,3,-5,3,-4,1,-4),
     shape(dark,12,-6,14,-6,14,-4,12,-4), shape('#778079',0,4,5,4,3,9,-1,9),
   ]},
-  revolver: { trigger:{x:5,y:5}, support:{x:8,y:5}, muzzle:{x:21,y:0}, magazine:{x:5,y:0}, shapes:[
+  revolver: { trigger:{x:1.5,y:7}, support:{x:3,y:9}, muzzle:{x:21,y:0}, magazine:{x:5,y:0}, shapes:[
     shape(steel,0,-4,9,-4,11,-2,21,-2,21,1,11,1,9,4,5,5,3,12,-3,11,0,4,-3,2,-3,-2),
     shape(wood,0,4,5,5,3,12,-3,11,-2,8), shape(light,10,-4,20,-4,20,-2,10,-2),
     shape(dark,-2,-6,0,-6,2,-3,-2,-3), shape(dark,2,-3,8,-3,8,3,2,3),

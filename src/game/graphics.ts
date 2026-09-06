@@ -8,7 +8,7 @@ export interface GraphicsSettings {
 export type GraphicsPreset = 'low' | 'balanced' | 'high';
 export const GRAPHICS_PRESETS: Readonly<Record<GraphicsPreset, Readonly<GraphicsSettings>>> = {
   low: Object.freeze({ renderScale: .5, frameRate: 60, scenery: 'low', effects: 'low' }),
-  balanced: Object.freeze({ renderScale: .75, frameRate: 60, scenery: 'medium', effects: 'medium' }),
+  balanced: Object.freeze({ renderScale: .75, frameRate: 120, scenery: 'medium', effects: 'medium' }),
   high: Object.freeze({ renderScale: 1, frameRate: 0, scenery: 'high', effects: 'high' }),
 };
 export const defaultGraphics = (): GraphicsSettings => ({ ...GRAPHICS_PRESETS.balanced });

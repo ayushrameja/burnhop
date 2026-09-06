@@ -27,7 +27,7 @@ function expectClear(body: PlayerState) {
   expect(arena.terrain!.filter(solid => rectOverlapsSolid(body, solid)).map(solid => solid.id)).toEqual([]);
 }
 async function crouch(page: Page) {
-  await page.keyboard.down('KeyS');
+  await page.keyboard.down('KeyC');
   await page.waitForFunction(() => {
     const body = window.__BURNHOP__!.snapshot().player;
     return body.grounded && body.crouchAmount === 1;
@@ -98,7 +98,7 @@ for (const mouth of mouths) {
     }
     await page.screenshot({ path: `${screenshots}/${mouth.id}-entrance-crouch.png` });
 
-    await page.keyboard.up('KeyS');
+    await page.keyboard.up('KeyC');
     await ticks(page, 24);
     const released = await player(page);
     if (mouth.low) {
@@ -113,7 +113,7 @@ for (const mouth of mouths) {
     expect((await player(page)).height).toBe(CONFIG.bodyHeight);
     await crouch(page);
     await walkTo(page, mouth.outside.x);
-    await page.keyboard.up('KeyS');
+    await page.keyboard.up('KeyC');
     await page.waitForFunction(() => window.__BURNHOP__!.snapshot().player.crouchAmount === 0);
     expectClear(await player(page));
     expect((await player(page)).fuel).toBe(100);

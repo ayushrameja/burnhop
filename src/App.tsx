@@ -109,7 +109,7 @@ export default function App() {
   const resumeRef = useRef<HTMLButtonElement>(null);
   const launchRef = useRef<HTMLButtonElement>(null);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
-  const menuAudio = useMenuAudio(settings.muted, gateVisible || (screen !== 'practice' && screen !== 'loading' && screen !== 'multiplayer'), settings.audio, true);
+  const menuAudio = useMenuAudio(settings.muted, gateVisible || (screen !== 'practice' && screen !== 'loading' && screen !== 'multiplayer'), settings.audio, gateVisible ? 'entry' : 'lobby');
 
   const pause = useCallback(() => {
     generation.current++;

@@ -32,7 +32,7 @@ for (const look of CHARACTER_LOOKS.filter(look => look.id !== 'base')) {
     expect(before.player.width).toBe(36);
     expect(before.player.height).toBe(68);
     const feet = before.player.y + before.player.height;
-    await page.keyboard.down('KeyS');
+    await page.keyboard.down('KeyC');
     await page.waitForFunction(() => window.__BURNHOP__!.snapshot().player.crouchAmount === 1);
     const crouching = await page.evaluate(() => window.__BURNHOP__!.snapshot().player);
     expect(crouching.width).toBe(36);
@@ -47,7 +47,7 @@ for (const look of CHARACTER_LOOKS.filter(look => look.id !== 'base')) {
     await page.mouse.up();
     await page.waitForFunction(() => window.__BURNHOP__!.snapshot().target.hitTicks === 0);
     await page.screenshot({ path: `docs/screenshots/46-${look.id}-practice-crouch.png` });
-    await page.keyboard.up('KeyS');
+    await page.keyboard.up('KeyC');
     await page.waitForFunction(() => window.__BURNHOP__!.snapshot().player.crouchAmount === 0);
     await page.screenshot({ path: `docs/screenshots/46-${look.id}-practice.png` });
     await page.keyboard.press('Escape');

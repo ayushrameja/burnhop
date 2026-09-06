@@ -20,4 +20,4 @@ function hash(value: string): string {
   return (result >>> 0).toString(16).padStart(8, '0');
 }
 // Increment the gameplay revision when simulation behavior changes without tuning/schema changes.
-export const COMPATIBILITY_ID = `burnhop-2:gameplay-2:${hash(JSON.stringify({ CONFIG, WEAPONS, DUAL_CONFIG, MELEE_CONFIG, WEAPON_HANDLING, PICKUP_CONFIG, hitRegions: [0.25, 0.45, 0.3] }))}:${hash(JSON.stringify(authoredOutpost))}`;
+export const COMPATIBILITY_ID = `burnhop-3:gameplay-3:${hash(JSON.stringify({ CONFIG, WEAPONS, DUAL_CONFIG, MELEE_CONFIG, WEAPON_HANDLING, PICKUP_CONFIG, hitRegions: [0.25, 0.45, 0.3] }))}:${hash(JSON.stringify(authoredOutpost))}`;

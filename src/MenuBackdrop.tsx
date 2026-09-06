@@ -133,9 +133,12 @@ export default function MenuBackdrop({ appearance, reducedMotion, getDanceTime }
       ctx.drawImage(scenery, 0, 0, width, height);
 
       const beat = danceBeat(getDanceTime() ?? elapsed / 1000, reducedMotion);
-      const scale = Math.min(height / 150, width / 112);
-      const pilotX = width * .715;
-      const pilotY = height * .853;
+      const viewportWidth = canvas.parentElement?.clientWidth ?? width;
+      const compact = viewportWidth < 700;
+      const scale = compact ? Math.min(height / 440, viewportWidth / 140) : Math.min(height / 150, width / 112);
+      // On phones the backdrop extends beyond the viewport; keep the whole dance below the controls.
+      const pilotX = width * (compact ? .57 : .715);
+      const pilotY = height * (compact ? .90 : .853);
 
       const shadow = ctx.createRadialGradient(pilotX, pilotY + 5, 0, pilotX, pilotY + 5, scale * 32);
       shadow.addColorStop(0, '#070b0ca6');
@@ -149,7 +152,7 @@ export default function MenuBackdrop({ appearance, reducedMotion, getDanceTime }
       ctx.restore();
 
       // The production vector renderer needs no decoded image assets.
-      drawDancingCharacter(ctx, pilotX, pilotY, scale, appearance, beat, reducedMotion);
+      if (!compact) drawDancingCharacter(ctx, pilotX, pilotY, scale, appearance, beat, reducedMotion);
 
       const vignette = ctx.createLinearGradient(0, 0, 0, height);
       vignette.addColorStop(0, '#09101435');
@@ -158,6 +161,7 @@ export default function MenuBackdrop({ appearance, reducedMotion, getDanceTime }
       vignette.addColorStop(1, '#0910149c');
       ctx.fillStyle = vignette;
       ctx.fillRect(0, 0, width, height);
+      if (compact) drawDancingCharacter(ctx, pilotX, pilotY, scale, appearance, beat, reducedMotion);
     };
 
     const resize = () => {
@@ -201,5 +205,5 @@ export default function MenuBackdrop({ appearance, reducedMotion, getDanceTime }
     };
   }, [appearance, reducedMotion, getDanceTime]);
 
-  return <canvas ref={canvasRef} className="menu-backdrop" role="img" aria-label="Pilot dancing in the hangar" />;
+  return <canvas ref={canvasRef} className="menu-backdrop" role="img" aria-label="Pilot dancing bhangra in the hangar" />;
 }

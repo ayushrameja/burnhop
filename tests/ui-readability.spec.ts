@@ -156,7 +156,7 @@ test('fuel gauge follows real keyboard flight through burning, low, empty, and r
   await ticks(page, 14);
   await page.keyboard.up('Space');
   await ticks(page, 2);
-  await page.keyboard.down('Space');
+  await page.keyboard.down('ShiftLeft');
   await page.waitForFunction(() => {
     const player = window.__BURNHOP__!.snapshot().player;
     return player.thrusting && player.fuel < 75 && player.fuel > 60;
@@ -175,7 +175,7 @@ test('fuel gauge follows real keyboard flight through burning, low, empty, and r
   await expect(page.locator('.pilot-fuel-segment[data-filled="true"]')).toHaveCount(0);
   expect((await snapshot(page)).player.thrusting).toBe(false);
   await page.screenshot({ path: `${screenshots}/fuel-empty.png` });
-  await page.keyboard.up('Space');
+  await page.keyboard.up('ShiftLeft');
   await expect.poll(async () => Number(await meter.getAttribute('aria-valuenow')), { timeout: 6000 }).toBeGreaterThan(30);
   await expect(page.locator('.pilot-fuel-warning')).toBeEmpty();
   await expect(page.locator('.pilot-hud')).toHaveAttribute('data-fuel-warning', 'false');

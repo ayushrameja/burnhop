@@ -50,7 +50,7 @@ test('one trigger fires both hands and sequential reload fills their separate ma
   await expect(page.getByTestId('hud-offhand-ammo')).toHaveText('20', { timeout: 5000 });
 });
 
-test('F punches through the normal input path and the practice target loses twenty health', async ({ page }, testInfo) => {
+test('E punches through the normal input path and the practice target loses twenty health', async ({ page }, testInfo) => {
   await enter(page);
   await page.keyboard.down('KeyD');
   await page.waitForFunction(() => { const { player, target } = window.__BURNHOP__!.snapshot(); return target.x - player.x < 58; });
@@ -60,17 +60,17 @@ test('F punches through the normal input path and the practice target loses twen
     return api.toScreen(target.x + target.width / 2, target.y + target.height / 2);
   });
   await moveAim(page, contact.x, contact.y);
-  await page.keyboard.press('KeyF');
+  await page.keyboard.press('KeyE');
   await page.waitForFunction(() => window.__BURNHOP__!.snapshot().target.health === 80);
   const result = await page.evaluate(() => window.__BURNHOP__!.snapshot());
   expect(result.player.meleeSequence).toBe(1); expect(result.shotsFired).toBe(0); expect(result.player.weapon.ammo).toBe(12);
   await page.screenshot({ path: testInfo.outputPath('punch-contact.png') });
 });
 
-test('new pickup, pairing and punch actions expose their E Q F defaults and can be rebound', async ({ page }) => {
+test('pickup, pairing and punch actions expose their F Q E defaults and can be rebound', async ({ page }) => {
   await openMenu(page);
   await page.getByRole('button', { name: 'Settings & Controls', exact: true }).click();
-  for (const [action, key] of [['Equip weapon alone', 'E'], ['Pair weapon', 'Q'], ['Punch', 'F']]) {
+  for (const [action, key] of [['Equip weapon alone', 'F'], ['Pair weapon', 'Q'], ['Punch', 'E']]) {
     await expect(page.getByRole('button', { name: `Change ${action} primary binding`, exact: true })).toContainText(key);
   }
   await page.getByRole('button', { name: 'Change Punch primary binding', exact: true }).click();

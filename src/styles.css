@@ -138,7 +138,7 @@ kbd { font: 10px var(--mono); display: inline-flex; align-items: center; justify
 @media (max-width: 700px) {
   .menu-screen { min-height: 100dvh; height: auto; padding: 112px 7% 110px; }
   .menu-backdrop { width: 155%; left: -35%; }
-  .menu-vignette { background: linear-gradient(90deg, #090b0eaf, transparent 85%), linear-gradient(0deg, #090b0ef5, #090b0eaa 34%, transparent 75%); }
+  .menu-vignette { background: linear-gradient(90deg, #090b0e55, transparent 85%), linear-gradient(0deg, #090b0e40, #090b0e22 34%, transparent 75%); }
   .menu-corner { left: 7%; top: 4%; }
   .menu-copy { position: relative; inset: auto; transform: none; width: min(460px, 100%); }
   .menu-copy h1 { font-size: clamp(66px, 15vw, 100px); margin-bottom: 28px; }

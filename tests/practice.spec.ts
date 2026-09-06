@@ -95,7 +95,7 @@ test('menu, customization persistence, and an unobstructed practice view', async
   expect(errors).toEqual([]);
 });
 
-test('keyboard jump, held second press, fuel depletion, landing and flight fire', async ({ page }) => {
+test('keyboard jump, held Shift thrust, fuel depletion, landing and flight fire', async ({ page }) => {
   await enter(page);
   const start = await snapshot(page);
   await page.keyboard.down('KeyD');
@@ -110,7 +110,7 @@ test('keyboard jump, held second press, fuel depletion, landing and flight fire'
   expect(jump.player.thrusting).toBe(false);
   await page.keyboard.up('Space');
   await advanceTicks(page, 2);
-  await page.keyboard.down('Space');
+  await page.keyboard.down('ShiftLeft');
   await advanceTicks(page, 24);
   const flight = await snapshot(page);
   expect(flight.player.thrusting).toBe(true);
@@ -129,7 +129,7 @@ test('keyboard jump, held second press, fuel depletion, landing and flight fire'
   const resting = await snapshot(page);
   expect(resting.player.fuel).toBeGreaterThan(0);
   expect(resting.player.thrusting).toBe(false);
-  await page.keyboard.up('Space');
+  await page.keyboard.up('ShiftLeft');
 });
 
 test('early landing presses chain bunny hops without spending jet fuel', async ({ page }) => {

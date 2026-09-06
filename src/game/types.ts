@@ -29,7 +29,7 @@ export interface PlayerState extends Rect {
   id: string; vx: number; vy: number; grounded: boolean; coyoteTicks: number; jumpBufferTicks: number;
   aimAngle: number; crouchAmount: number; health: number; fuel: number; thrusting: boolean;
   thrustLatched: boolean; fuelDelayTicks: number; weapon: WeaponState; offhand: WeaponState | null;
-  equipTicks: number; fireLockTicks: number; fireHeldLast: boolean;
+  equipTicks: number; fireLockTicks: number; fireHeldLast: boolean; nextShotOffhand: boolean;
   meleeWindupTicks: number; meleeCooldownTicks: number; meleeAimAngle: number; meleeSequence: number;
   impulseX: number; impulseY: number;
 }

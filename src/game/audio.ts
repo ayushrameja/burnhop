@@ -3,6 +3,7 @@ import { createSyntheticBuffer, weaponSoundId, type SyntheticSound } from './aud
 import { getReloadProgress, RELOAD_CUES } from './reload';
 import { lowHealthActive } from './feedback';
 import { WEAPONS } from './weapons';
+import { WEAPON_AUDIO_MIX, WEAPON_AUDIO_SAMPLES, type ReloadStage, type ShotTake } from './weaponAudio';
 import type { GameEvent, WeaponState } from './types';
 
 export interface MovementAudioState {
@@ -11,12 +12,16 @@ export interface MovementAudioState {
 
 type Channel = 'weapons' | 'movement' | 'feedback';
 type Voice = { source: AudioBufferSourceNode; gain: GainNode; filter?: BiquadFilterNode; panner?: StereoPannerNode;
-  priority: number; local: boolean; level: number; sound: SyntheticSound };
+  priority: number; local: boolean; level: number; sound: SyntheticSound; reloadKey?: string };
+type ReloadTimeline = { progress: number; played: Set<ReloadStage>; awaitingRestartFrom?: number };
+const reloadStagesAt = (progress: number) => new Set((Object.entries(RELOAD_CUES) as [ReloadStage, number][])
+  .filter(([, threshold]) => progress >= threshold).map(([stage]) => stage));
 type ActorSoundState = { movement: MovementAudioState | null; distance: number; stepIndex: number; shotIndex: number; reloadProgress: number; jet: Voice | null };
 const STEP_DISTANCE = Math.PI / 0.045; // Same alternating-foot cadence as the renderer.
-const SAMPLE_NAMES = [
+export const SAMPLE_NAMES = [
   'rifle-1', 'rifle-2', 'rifle-3', 'footstep-1', 'footstep-2', 'footstep-3', 'footstep-4',
   'land', 'impact-metal', 'reload-remove', 'reload-insert', 'reload-rack',
+  ...WEAPON_AUDIO_SAMPLES,
 ] as const;
 type SampleName = typeof SAMPLE_NAMES[number];
 
@@ -48,7 +53,7 @@ export class GameAudio {
   private spatialLocal = true;
   private heartbeatActive = false;
   private nextHeartbeat = 0;
-  private reloadTimelines = new Map<string, number>();
+  private reloadTimelines = new Map<string, ReloadTimeline>();
 
   async unlock(): Promise<void> {
     if (this.disposed) return;
@@ -147,20 +152,29 @@ export class GameAudio {
   }
 
   private routeVoice(voice: Voice, channel: Channel): void {
+    let output: AudioNode = voice.gain;
+    if (channel === 'weapons' && !this.spatialLocal) {
+      // Distance loses high-frequency detail as well as level. Close local fire stays dry.
+      voice.filter = this.context!.createBiquadFilter();
+      voice.filter.type = 'lowpass';
+      voice.filter.frequency.value = 1800 + 12500 * Math.pow(Math.min(1, this.spatialVolume / .7), .7);
+      voice.filter.Q.value = .55;
+      output.connect(voice.filter); output = voice.filter;
+    }
     // Mono remains a supported fallback for devices without a stereo panner.
     if (typeof this.context?.createStereoPanner === 'function') {
       voice.panner = this.context.createStereoPanner();
       voice.panner.pan.value = this.spatialPan;
-      voice.gain.connect(voice.panner); voice.panner.connect(this.channels[channel]!);
-    } else voice.gain.connect(this.channels[channel]!);
+      output.connect(voice.panner); voice.panner.connect(this.channels[channel]!);
+    } else output.connect(this.channels[channel]!);
   }
 
-  private playSample(name: SampleName | null, fallback: SyntheticSound, channel: Channel, volume: number, rate = 1, priority = 2): void {
+  private playSample(name: SampleName | null, fallback: SyntheticSound, channel: Channel, volume: number, rate = 1, priority = 2, reloadKey?: string): void {
     if (!this.canPlay(channel) || this.spatialVolume <= .001 || !this.claimVoice(priority)) return;
     const context = this.context!;
     let voice: Voice | null = null;
     try {
-      voice = { source: context.createBufferSource(), gain: context.createGain(), priority, local: this.spatialLocal, level: this.spatialVolume, sound: fallback };
+      voice = { source: context.createBufferSource(), gain: context.createGain(), priority, local: this.spatialLocal, level: this.spatialVolume, sound: fallback, reloadKey };
       voice.source.buffer = (name ? this.samples.get(name) : undefined) ?? this.fallback(fallback);
       voice.source.playbackRate.value = rate;
       voice.gain.gain.value = volume * this.spatialVolume;
@@ -258,26 +272,49 @@ export class GameAudio {
 
   /** Each physical weapon owns a cue ledger, including sequential dual reloads. */
   updateWeaponReloads(actorId: string, weapon: WeaponState, offhand: WeaponState | null = null): void {
+    if (this.disposed) return;
     const retained = new Set<string>();
     for (const equipped of [weapon, offhand]) {
       if (!equipped) continue;
       const key = `${actorId}:${equipped.instanceId}`;
       retained.add(key);
       const progress = getReloadProgress(equipped.reloadTicks, WEAPONS[equipped.weaponId].reloadTicks);
-      if (progress < 0) { this.reloadTimelines.set(key, -1); continue; }
-      if (this.disposed || this.paused) continue;
       const last = this.reloadTimelines.get(key);
+      if (progress < 0) {
+        if (last) {
+          if (last.progress >= 0) this.stopReloadVoices(key);
+          last.progress = -1; last.played.clear(); last.awaitingRestartFrom = undefined;
+        } else this.reloadTimelines.set(key, { progress: -1, played: new Set() });
+        continue;
+      }
       // First observation may be mid-reload after join/respawn; do not play its history.
-      if (last === undefined) { this.reloadTimelines.set(key, progress); continue; }
-      const previous = last < 0 || progress < last ? 0 : last;
-      this.reloadTimelines.set(key, progress);
-      for (const [stage, threshold] of Object.entries(RELOAD_CUES) as [keyof typeof RELOAD_CUES, number][]) {
-        if (previous < threshold && progress >= threshold) {
-          this.playSample(null, `reload-${equipped.weaponId}-${stage}`, 'weapons', .48, 1, 1);
+      const timeline: ReloadTimeline = last ?? { progress, played: new Set<ReloadStage>() };
+      if (timeline.progress < 0) timeline.played.clear();
+      if (timeline.awaitingRestartFrom !== undefined && progress < timeline.awaitingRestartFrom - .1) {
+        // A start event may precede its state patch. Baseline when that new cycle arrives.
+        timeline.played = reloadStagesAt(progress);
+        timeline.awaitingRestartFrom = undefined;
+      }
+      timeline.progress = progress;
+      this.reloadTimelines.set(key, timeline);
+      for (const [stage, threshold] of Object.entries(RELOAD_CUES) as [ReloadStage, number][]) {
+        if (progress >= threshold && !timeline.played.has(stage)) {
+          // The cue ledger survives small prediction rollbacks, mute and pause.
+          timeline.played.add(stage);
+          if (last === undefined || this.paused) continue;
+          const mix = WEAPON_AUDIO_MIX[equipped.weaponId];
+          this.playSample(`weapons/reload-${equipped.weaponId}-${stage}`, `reload-${equipped.weaponId}-${stage}`,
+            'weapons', mix.reload * (stage === 'rack' ? 1 : .9), .995 + Math.random() * .01, 1, key);
         }
       }
     }
-    for (const key of this.reloadTimelines.keys()) if (key.startsWith(`${actorId}:`) && !retained.has(key)) this.reloadTimelines.delete(key);
+    for (const key of this.reloadTimelines.keys()) if (key.startsWith(`${actorId}:`) && !retained.has(key)) {
+      this.stopReloadVoices(key); this.reloadTimelines.delete(key);
+    }
+  }
+
+  private stopReloadVoices(key: string): void {
+    for (const voice of this.voices) if (voice.reloadKey === key) this.stopVoice(voice);
   }
 
   private localFeedback(sound: SyntheticSound, volume: number): void {
@@ -310,7 +347,11 @@ export class GameAudio {
     for (const event of events) {
       if (event.type === 'shot') {
         const weapon = weaponSoundId(event.weaponId);
-        if (weapon) this.playSample(null, `shot-${weapon}`, 'weapons', weapon === 'sniper' ? .85 : .72, .99 + (event.shotCounter % 3) * .01);
+        if (weapon) {
+          const take = (this.shotIndex++ % 3 + 1) as ShotTake;
+          this.playSample(`weapons/shot-${weapon}-${take}`, `shot-${weapon}`, 'weapons',
+            WEAPON_AUDIO_MIX[weapon].shot * (.98 + Math.random() * .04), .995 + Math.random() * .01);
+        }
         else this.playSample(`rifle-${this.shotIndex++ % 3 + 1}` as SampleName, 'rifle', 'weapons', .72, .98 + Math.random() * .04);
         if (event.surface && event.surface !== 'body') {
           this.playSample(event.surface === 'bunker' ? 'impact-metal' : null,
@@ -319,7 +360,7 @@ export class GameAudio {
       }
       if (event.type === 'hit') this.playSample(null, event.weaponId ? 'impact-body' : 'punch-hit', 'weapons', .27, 1, 2);
       if (event.type === 'meleeStart') this.playSample(null, 'punch-swing', 'weapons', .32, 1, 1);
-      if (event.type === 'dryfire') this.playSample(null, 'dry', 'weapons', .3, 1, 2);
+      if (event.type === 'dryfire') this.playSample('weapons/dry-fire', 'dry', 'weapons', .38, 1, 2);
       if (event.type === 'jump') this.playSample(`footstep-${this.stepIndex++ % 4 + 1}` as SampleName, 'footstep', 'movement', 0.26, 1.15);
       // Reload stages and impact-scaled landings are handled by their simulation updates.
     }
@@ -328,7 +369,23 @@ export class GameAudio {
   /** One audio context, independent footsteps/reload/jet state for each online actor. */
   updateActor(id: string, state: MovementAudioState & { weapon?: WeaponState; offhand?: WeaponState | null }, reloadProgress: number, thrusting: boolean,
     events: GameEvent[], listener: { x: number; y: number }, local = false): void {
-    if (this.disposed || this.paused) return;
+    if (this.disposed) return;
+    for (const event of events) if (event.type === 'reloadStart' && event.instanceId) {
+      const equipped = [state.weapon, state.offhand].find(weapon => weapon?.instanceId === event.instanceId);
+      if (!equipped) continue;
+      // Authority can skip the idle snapshot between two reloads. An explicit start
+      // is a new cycle; a small backwards progress correction is not.
+      const key = `${id}:${event.instanceId}`;
+      const progress = getReloadProgress(equipped.reloadTicks, WEAPONS[equipped.weaponId].reloadTicks);
+      this.stopReloadVoices(key);
+      this.reloadTimelines.set(key, { progress, played: reloadStagesAt(progress),
+        awaitingRestartFrom: progress >= RELOAD_CUES.remove ? progress : undefined });
+    }
+    if (this.paused) {
+      // Online authority keeps moving in a pause menu. Consume its silent stages.
+      if (state.weapon) this.updateWeaponReloads(id, state.weapon, state.offhand);
+      return;
+    }
     const practice: ActorSoundState = { movement: this.movement, distance: this.distance, stepIndex: this.stepIndex,
       shotIndex: this.shotIndex, reloadProgress: this.reloadProgress, jet: this.jet };
     const actor = this.actors.get(id) ?? { movement: null, distance: 0, stepIndex: 0, shotIndex: 0, reloadProgress: -1, jet: null };
@@ -350,9 +407,13 @@ export class GameAudio {
     for (const [id, actor] of this.actors) if (!ids.has(id)) {
       if (actor.jet) this.stopVoice(actor.jet);
       this.actors.delete(id);
-      for (const key of this.reloadTimelines.keys()) if (key.startsWith(`${id}:`)) this.reloadTimelines.delete(key);
+      for (const key of this.reloadTimelines.keys()) if (key.startsWith(`${id}:`)) {
+        this.stopReloadVoices(key); this.reloadTimelines.delete(key);
+      }
     }
-    for (const key of this.reloadTimelines.keys()) if (!ids.has(key.slice(0, key.indexOf(':')))) this.reloadTimelines.delete(key);
+    for (const key of this.reloadTimelines.keys()) if (!ids.has(key.slice(0, key.indexOf(':')))) {
+      this.stopReloadVoices(key); this.reloadTimelines.delete(key);
+    }
   }
 
   /** Cut every voice immediately; no scheduled Foley continues behind the pause screen. */

@@ -8,6 +8,7 @@ import { drawCharacterHitFlash } from './characterHitFlash';
 import { RELOAD_CUES } from './reload';
 import type { CharacterParts } from './characterParts';
 import { drawWeaponArtwork, drawWeaponMagazine, WEAPON_ARTWORK } from './weaponArtwork';
+import { getDualWeaponOffset } from './stance';
 
 export interface DetailedArmGeometry { shoulder: Vec2; elbow: Vec2; hand: Vec2; upperLength: number; forearmLength: number }
 export interface DetailedMagazineGeometry { center: Vec2; angle: number; opacity: number; seated: boolean; fresh: boolean }
@@ -21,6 +22,7 @@ export interface DetailedCharacterRig {
   triggerArm: DetailedArmGeometry;
   supportArm: DetailedArmGeometry;
   supportHandAngle: number;
+  triggerHandAngle: number;
   magazine: DetailedMagazineGeometry;
   reload: { progress: number; stage: 'reach' | 'remove' | 'stow' | 'insert' | 'seat' | 'rack' | 'settle' } | null;
   rifle: { pivot: Vec2; angle: number; recoil: number; boltOffset: number; triggerGrip: Vec2; supportGrip: Vec2; muzzle: Vec2 };
@@ -45,13 +47,13 @@ const rotated = (p: Vec2, pivot: Vec2, angle: number): Vec2 => ({
   x: pivot.x + (p.x - pivot.x) * Math.cos(angle) - (p.y - pivot.y) * Math.sin(angle),
   y: pivot.y + (p.x - pivot.x) * Math.sin(angle) + (p.y - pivot.y) * Math.cos(angle),
 });
-function solveArm(shoulder: Vec2, hand: Vec2, length: number): DetailedArmGeometry {
+function solveArm(shoulder: Vec2, hand: Vec2, length: number, bendDirection = 1): DetailedArmGeometry {
   const dx = hand.x - shoulder.x, dy = hand.y - shoulder.y;
   const distance = Math.hypot(dx, dy);
   const bend = Math.sqrt(Math.max(0, length * length - distance * distance / 4));
   return {
     shoulder, hand,
-    elbow: { x: (shoulder.x + hand.x) / 2 - dy / (distance || 1) * bend, y: (shoulder.y + hand.y) / 2 + dx / (distance || 1) * bend },
+    elbow: { x: (shoulder.x + hand.x) / 2 - dy / (distance || 1) * bend * bendDirection, y: (shoulder.y + hand.y) / 2 + dx / (distance || 1) * bend * bendDirection },
     upperLength: length, forearmLength: length,
   };
 }
@@ -124,7 +126,7 @@ export function calculateDetailedCharacterRig(pose: CharacterPose): DetailedChar
     geometry, aim,
     triggerArm: solveArm(shoulder(-8), triggerGrip, 11.5),
     supportArm: solveArm(shoulder(7), supportHand, 14),
-    supportHandAngle, magazine, reload,
+    supportHandAngle, triggerHandAngle: angle, magazine, reload,
     rifle: { pivot: aim.weaponPivot, angle, recoil, boltOffset, triggerGrip, supportGrip, muzzle: grip(DETAILED_RIFLE_ANCHORS.muzzle) },
   };
 }
@@ -140,7 +142,8 @@ function calculateWeaponCharacterRig(pose: CharacterPose, geometry: CharacterGeo
     const stowed=pose.offhandWeaponId&&(offhand?mainReloading:offhandReloading);
     const otherProgress=(offhand?pose.reloadProgress:pose.offhandReloadProgress)??-1;
     const stowAmount=stowed?segment(otherProgress,0,.12)*(1-segment(otherProgress,.88,1)):0;
-    const pivot=lerpPoint({x:aim.weaponPivot.x-(offhand?3*tilt:0),y:aim.weaponPivot.y+(offhand?7-10*tilt:0)},
+    const lane=pose.offhandWeaponId?getDualWeaponOffset(offhand?'offhand':'main'):{x:0,y:0};
+    const pivot=lerpPoint({x:aim.weaponPivot.x+lane.x,y:aim.weaponPivot.y+lane.y},
       {x:geometry.bodyOffset.x+(offhand?9:-11),y:geometry.bodyOffset.y-23},stowAmount);
     const angle=mix(aim.pitch*(1-tilt*.55)-tilt*(pose.reducedMotion ? .035 : .08),1.2,stowAmount);
     const recoil=progress>=0||stowed?0:clamp01((offhand?pose.offhandRecoil:pose.recoil)??0);
@@ -166,10 +169,11 @@ function calculateWeaponCharacterRig(pose: CharacterPose, geometry: CharacterGeo
     const reach=segment(pose.offhandReloadProgress!,0,.12)*(1-segment(pose.offhandReloadProgress!,.82,1));
     mainHand=lerpPoint(main.triggerGrip,{x:offhand.magazine.center.x,y:offhand.magazine.center.y+3},reach);
   }
-  const mainShoulder=shoulder(-8);
+  const mainShoulder=shoulder(offhand?7:-8);
   if(punch>0){mainShoulder.x+=Math.cos(aim.pitch)*punch*14;mainShoulder.y+=Math.sin(aim.pitch)*punch*14;}
-  return {geometry,aim,weaponId:pose.weaponId,offhand,triggerArm:solveArm(mainShoulder,mainHand,11.5),supportArm:solveArm(shoulder(7),supportHand,14),
-    supportHandAngle:offhand?.angle??main.angle,magazine:main.magazine,
+  return {geometry,aim,weaponId:pose.weaponId,offhand,triggerArm:solveArm(mainShoulder,mainHand,11.5),supportArm:solveArm(shoulder(offhand?-8:7),supportHand,14),
+    supportHandAngle:mainReloading?main.angle:offhand?.angle??main.angle,
+    triggerHandAngle:offhand && offhandReloading?offhand.angle:main.angle,magazine:main.magazine,
     reload:progress>=0?{progress,stage:progress<.15?'reach':progress<.35?'remove':progress<.5?'stow':progress<.65?'insert':progress<.85?'rack':'settle'}:null,
     rifle:main};
 }
@@ -243,7 +247,12 @@ function drawLeg(ctx: CanvasRenderingContext2D, leg: CharacterLegGeometry, appea
     box(ctx,leg.knee.x-3.1,leg.knee.y-2.6,6.2,5.1,1.3,p.dark,OUTLINE,.9);
     line(ctx,[leg.knee.x-1.9,leg.knee.y-1.1,leg.knee.x+1.9,leg.knee.y-1.1],p.light,.75);
   } else line(ctx,[leg.knee.x-1.2,leg.knee.y-1,leg.knee.x+2,leg.knee.y],p.dark,.8);
+  ctx.save();
+  ctx.translate(leg.ankle.x, leg.ankle.y);
+  ctx.rotate(leg.bootAngle ?? 0);
+  ctx.translate(-leg.ankle.x, -leg.ankle.y);
   drawBoot(ctx, leg, appearance, near);
+  ctx.restore();
   ctx.restore();
 }
 
@@ -602,12 +611,31 @@ export function drawDetailedCharacter(
     return;
   }
   const rig=calculateDetailedCharacterRig(pose);
+  const moonwalk=pose.danceBeat!==undefined && pose.danceStyle==='moonwalk';
   if(pose.danceBeat!==undefined){
     const beat=pose.reducedMotion?0:pose.danceBeat*Math.PI*2;
     const body=rig.geometry.bodyOffset;
     const shoulder=(x:number)=>({x:body.x+x,y:body.y-45});
-    rig.triggerArm=solveArm(shoulder(-8),{x:body.x-16+Math.sin(beat)*4,y:body.y-64-Math.cos(beat)*5},11.5);
-    rig.supportArm=solveArm(shoulder(7),{x:body.x+23+Math.sin(beat)*4,y:body.y-61+Math.cos(beat)*5},14);
+    if(moonwalk){
+      rig.triggerArm=solveArm(shoulder(-8),{x:body.x-15-Math.sin(beat)*3,y:body.y-26},11.5);
+      // Bend the far elbow away from the torso so the relaxed arm remains connected in silhouette.
+      rig.supportArm=solveArm(shoulder(7),{x:body.x+17+Math.sin(beat)*3,y:body.y-26},12.5,-1);
+    }else{
+      rig.triggerArm=solveArm(shoulder(-8),{x:body.x-19+Math.sin(beat)*4,y:body.y-62-Math.cos(beat)*6},11.5);
+      rig.supportArm=solveArm(shoulder(7),{x:body.x+22-Math.sin(beat)*5,y:body.y-64+Math.cos(beat)*6},14);
+    }
+    if(!pose.reducedMotion) for(const [index,leg] of [rig.geometry.nearLeg,rig.geometry.farLeg].entries()){
+      const phase=beat/2+index*Math.PI;
+      const lift=Math.max(0,Math.cos(phase));
+      const ankle={x:(index===0?7:-8)+Math.sin(phase)*(moonwalk?10:12),y:-3-lift*(moonwalk?3:12)};
+      const dx=ankle.x-leg.hip.x,dy=ankle.y-leg.hip.y,distance=Math.hypot(dx,dy)||1;
+      const bend=Math.sqrt(Math.max(0,15*15-distance*distance/4));
+      leg.knee={x:(leg.hip.x+ankle.x)/2+dy/distance*bend,y:(leg.hip.y+ankle.y)/2-dx/distance*bend};
+      leg.ankle=ankle;
+      leg.boot={...leg.boot,x:ankle.x-leg.boot.width/2+2,y:ankle.y-3};
+      // The raised heel trades support with the flat, sliding foot.
+      leg.bootAngle=moonwalk?lift*.45:-lift*.2;
+    }
   }
   const facing=Math.cos(pose.aimAngle)>=0?1:-1;
   const waistY=rig.geometry.bodyOffset.y-rig.geometry.bodyBob-25;
@@ -615,23 +643,44 @@ export function drawDetailedCharacter(
   drawExhaust(ctx,rig,pose);
   drawLeg(ctx,rig.geometry.farLeg,appearance,false,waistY);
   drawArm(ctx,rig.supportArm,appearance,true);
-  if(rig.offhand && pose.meleeProgress===undefined)drawHeldWeapon(ctx,rig.offhand,pose.reducedMotion??false);
+  if(moonwalk){
+    ctx.save();ctx.translate(rig.supportArm.hand.x,rig.supportArm.hand.y);
+    drawHand(ctx,appearance,false);ctx.restore();
+  }
   drawTorso(ctx,rig,appearance);
   drawLeg(ctx,rig.geometry.nearLeg,appearance,true,waistY);
   drawBelt(ctx,rig,appearance);
   drawHead(ctx,rig,appearance,parts);
-  // The forearm remains in front of the chest while its shoulder sits behind the jacket.
-  const sleeve=clothingMaterial(appearance.topColor, 'top'), skin=SKIN_COLORS[appearance.skin];
-  const supportWidth=(appearance.build==='slim'?4.6:appearance.build==='broad'?6.2:5.4);
-  tube(ctx,rig.supportArm.elbow,rig.supportArm.hand,supportWidth-1,skin.dark);
-  if(appearance.top!=='t-shirt')tube(ctx,rig.supportArm.elbow,lerpPoint(rig.supportArm.elbow,rig.supportArm.hand,.64),supportWidth,sleeve.dark);
+  // Weapon grips need a foreground forearm. The moonwalk keeps the entire far arm behind the jacket.
+  if(!moonwalk){
+    const sleeve=clothingMaterial(appearance.topColor, 'top'), skin=SKIN_COLORS[appearance.skin];
+    const supportWidth=(appearance.build==='slim'?4.6:appearance.build==='broad'?6.2:5.4);
+    tube(ctx,rig.supportArm.elbow,rig.supportArm.hand,supportWidth-1,skin.dark);
+    if(appearance.top!=='t-shirt')tube(ctx,rig.supportArm.elbow,lerpPoint(rig.supportArm.elbow,rig.supportArm.hand,.64),supportWidth,sleeve.dark);
+  }
+  const holdingWeapons=pose.danceBeat===undefined && !(pose.meleeProgress!==undefined && pose.meleeProgress>=0);
+  if(rig.offhand && holdingWeapons){
+    // Paint the far gun over the jacket so the second grip does not disappear inside it.
+    drawHeldWeapon(ctx,rig.offhand,pose.reducedMotion??false);
+    if(!rig.reload){
+      ctx.save();ctx.translate(rig.supportArm.hand.x,rig.supportArm.hand.y);ctx.rotate(rig.supportHandAngle);
+      drawHand(ctx,appearance,true);ctx.restore();
+    }
+  }
   drawArm(ctx,rig.triggerArm,appearance,false);
-  if(pose.danceBeat===undefined && !(pose.meleeProgress!==undefined && pose.meleeProgress>=0)){
+  if(holdingWeapons){
     if(rig.weaponId)drawHeldWeapon(ctx,{...rig.rifle,weaponId:rig.weaponId,magazine:rig.magazine},pose.reducedMotion??false);
     else {drawRifle(ctx,rig,appearance);drawMagazine(ctx,rig.magazine);}
   }
-  ctx.save();ctx.translate(rig.supportArm.hand.x,rig.supportArm.hand.y);ctx.rotate(rig.supportHandAngle);
-  drawHand(ctx,appearance,false);ctx.restore();
+  if(!moonwalk && (!rig.offhand || !!rig.reload || !holdingWeapons)){
+    ctx.save();ctx.translate(rig.supportArm.hand.x,rig.supportArm.hand.y);ctx.rotate(rig.supportHandAngle);
+    drawHand(ctx,appearance,false);ctx.restore();
+  }
+  if(rig.weaponId && holdingWeapons){
+    // The artwork path used to omit this hand entirely; fingers must wrap over the grip.
+    ctx.save();ctx.translate(rig.triggerArm.hand.x,rig.triggerArm.hand.y);ctx.rotate(rig.triggerHandAngle);
+    drawHand(ctx,appearance,(pose.offhandReloadProgress??-1)<0);ctx.restore();
+  }
   ctx.restore();
 }
 
@@ -643,11 +692,15 @@ function drawHeldWeapon(ctx:CanvasRenderingContext2D,weapon:HeldWeaponGeometry,r
 }
 
 /** The same equipped pilot artwork dances unarmed; beat is expressed in musical cycles. */
-export function drawDancingCharacter(ctx:CanvasRenderingContext2D,x:number,y:number,scale:number,appearance:DetailedAppearance,beat:number,reducedMotion:boolean):void{
+export function drawDancingCharacter(ctx:CanvasRenderingContext2D,x:number,y:number,scale:number,appearance:DetailedAppearance,beat:number,reducedMotion:boolean,style:'moonwalk'|'bhangra'='bhangra'):void{
   const cycle=reducedMotion?0:beat*Math.PI*2;
-  drawDetailedCharacter(ctx,x,y+(reducedMotion?0:Math.sin(cycle)*1.8)*scale,scale,
-    {aimAngle:.05,danceBeat:beat,reducedMotion,crouchAmount:.1+(1-Math.cos(cycle))*.12,
-      locomotion:true,walkPhase:cycle/2,walkAmount:reducedMotion?0:.65,moveSpeed:90,airborneAmount:0,thrustAmount:0},appearance);
+  const moonwalk=style==='moonwalk';
+  const glide=reducedMotion?0:Math.cos(cycle/8)*13;
+  const hop=reducedMotion||moonwalk?0:-Math.max(0,Math.sin(cycle))*5;
+  drawDetailedCharacter(ctx,x+(moonwalk?glide:Math.sin(cycle/2)*2)*scale,y+hop*scale,scale,
+    {aimAngle:moonwalk&&Math.sin(cycle/8)<0?Math.PI:.05,danceBeat:beat,danceStyle:style,reducedMotion,
+      crouchAmount:reducedMotion?.1:moonwalk?.08:.14+(1-Math.cos(cycle))*.15,
+      locomotion:true,walkAmount:0,airborneAmount:0,thrustAmount:0},appearance);
 }
 
 export type CharacterFragmentKind='head'|'torso'|'farArm'|'nearArm'|'farLeg'|'nearLeg'|'upperBody'|'legs';

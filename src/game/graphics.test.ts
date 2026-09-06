@@ -5,11 +5,12 @@ import { FixedStepClock } from './timing';
 
 describe('graphics settings and independent drawing cadence', () => {
   it('defaults malformed fields independently and identifies custom combinations', () => {
+    expect(defaultGraphics()).toEqual({ renderScale: .75, frameRate: 120, scenery: 'medium', effects: 'medium' });
     expect(normalizeGraphics({ renderScale: 99, frameRate: 120, scenery: 'ultra', effects: 'low' }))
       .toEqual({ ...defaultGraphics(), frameRate: 120, effects: 'low' });
     for (const invalid of [undefined, null, false, [], 1]) expect(normalizeGraphics(invalid)).toEqual(defaultGraphics());
     for (const key of ['low', 'balanced', 'high'] as const) expect(graphicsPreset(GRAPHICS_PRESETS[key])).toBe(key);
-    expect(graphicsPreset({ ...defaultGraphics(), frameRate: 120 })).toBe('custom');
+    expect(graphicsPreset({ ...defaultGraphics(), frameRate: 60 })).toBe('custom');
   });
   it('keeps simulation at 60 Hz while limiting rendering on 60, 120, 144 and 240 Hz displays', () => {
     for (const refresh of [60, 120, 144, 240]) {
