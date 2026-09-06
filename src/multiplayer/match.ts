@@ -20,7 +20,7 @@ export function addPlayer(state: MatchState, guest: { id: string; nickname: stri
   const joinedOrder = Math.max(0, ...Object.values(state.players).map(p => p.joinedOrder)) + 1;
   const player: MatchPlayer = { ...createWorld(arena).player, id: guest.id,
     connected: true, ready: false, joinedOrder, lifeId: 0, kills: 0, deaths: 0,
-    respawnTicks: 0, protectionTicks: 0, nickname: guest.nickname, appearance: normalizeAppearance(guest.appearance) };
+    respawnTicks: 0, protectionTicks: 0, nickname: guest.nickname, appearance: Object.freeze(normalizeAppearance(guest.appearance)) };
   state.players[guest.id] = player;
   if (!state.hostId) state.hostId = guest.id;
   return player;

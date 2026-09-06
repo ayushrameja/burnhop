@@ -3,7 +3,7 @@ import { Reconciler, type InputHandle } from '@colyseus/sdk';
 import { DEFAULT_APPEARANCE } from '../game/appearance';
 import { cloneActor, compileArena } from '../game/simulation';
 import { addPlayer, createMatch } from '../multiplayer/match';
-import { neutralInput, OUTPOST_ARENA, type NetworkInput } from '../multiplayer/model';
+import { MATCH_CONFIG, neutralInput, OUTPOST_ARENA, type NetworkInput } from '../multiplayer/model';
 import { stepPredictedActor } from '../multiplayer/prediction';
 import { PlayerWire, playerFromWire, syncPlayerWire } from '../multiplayer/wire';
 import { stepWireActor } from './prediction';
@@ -15,7 +15,7 @@ function setup() {
   const arena = compileArena(OUTPOST_ARENA);
   const queued = new Map<number, NetworkInput>();
   let listener = () => {};
-  const input = { epoch: 0, sentCount: 0, lastProcessed: 0, stepMs: 1000 / 60, stepSeconds: 1 / 60, patchRate: 1000 / 30,
+  const input = { epoch: 0, sentCount: 0, lastProcessed: 0, stepMs: 1000 / 60, stepSeconds: 1 / 60, patchRate: 1000 / MATCH_CONFIG.stateRate,
     replayBufferSize: 128, at: (seq: number) => queued.get(seq), reckonTimeAt: () => 0,
     onSend: (callback: () => void) => { listener = callback; return () => { listener = () => {}; }; } };
   let liveEffects = 0;

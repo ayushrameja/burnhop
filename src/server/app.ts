@@ -29,7 +29,7 @@ export function installHttpGuard(http: ReturnType<typeof createServer>): void {
     response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     if (request.method === 'GET' && ['/health', '/__healthcheck', '/'].includes(path)) {
-      json(response, 200, { ok: true, compatibility: COMPATIBILITY_ID, tickRate: MATCH_CONFIG.tickRate, maxPlayers: MATCH_CONFIG.maxPlayers });
+      json(response, 200, { ok: true, compatibility: COMPATIBILITY_ID, tickRate: MATCH_CONFIG.tickRate, stateRate: MATCH_CONFIG.stateRate, interpolationDelayMs: MATCH_CONFIG.interpolationDelayMs, maxPlayers: MATCH_CONFIG.maxPlayers });
       return;
     }
     if (request.method === 'GET' && path === '/metrics') {

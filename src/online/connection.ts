@@ -2,6 +2,7 @@ import { Client, type Room } from '@colyseus/sdk';
 import type { DetailedAppearance } from '../game/appearance';
 import { COMPATIBILITY_ID, MATCH_CONFIG, type ActorEvent, type MatchPhase, type MatchPlayer } from '../multiplayer/model';
 import { MatchWire, playerFromWire } from '../multiplayer/wire';
+import { OnlinePerformance } from './performance';
 
 export interface OnlineSnapshot {
   status: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'error';
@@ -22,6 +23,9 @@ export function defaultOnlineEndpoint(): string {
 /** Owns the room session independently of canvas/capture and React screen lifetimes. */
 export class OnlineConnection {
   readonly endpoint: string;
+  performance = new OnlinePerformance();
+  private stateTimer: ReturnType<typeof setTimeout> | undefined;
+  private lastStatePublished = -Infinity;
   private client: Client | null;
   private room: Room<MatchWire> | null = null;
   private snapshot = emptySnapshot();
@@ -91,6 +95,7 @@ export class OnlineConnection {
     const room = this.room;
     this.room = null;
     this.forgetSession();
+    this.performance = new OnlinePerformance(); this.lastStatePublished = -Infinity;
     this.snapshot = emptySnapshot(); this.notify(); this.reset();
     if (room) { room.reconnection.enabled = false; await room.leave(true).catch(() => undefined); }
   }
@@ -113,12 +118,21 @@ export class OnlineConnection {
       if (generation !== this.generation) { await room.leave(true); return; }
       this.room = room;
       Object.assign(room.reconnection, { enabled: true, maxRetries: 30, minDelay: 300, maxDelay: 1500, minUptime: 0, maxEnqueuedMessages: 0 });
-      room.onStateChange(() => this.readState(room));
+      room.onStateChange(() => {
+        if (this.room !== room) return;
+        this.performance.patch(performance.now());
+        // Canvas reads the live schema. React needs only a 10 Hz score/timer view.
+        if (room.state.phase !== this.snapshot.phase || room.state.phase !== 'playing'
+          || performance.now() - this.lastStatePublished >= 100) this.readState(room);
+        else if (!this.stateTimer) this.stateTimer = setTimeout(() => this.readState(room),
+          Math.max(0, 100 - (performance.now() - this.lastStatePublished)));
+      });
       room.onMessage<ActorEvent[]>('events', events => { if (this.room === room) for (const listener of this.eventListeners) listener(events); });
       room.onMessage<{ message: string }>('notice', notice => { if (this.room === room) this.publish({ error: notice.message }); });
       room.onMessage<{ player?: MatchPlayer }>('resync', payload => { if (this.room === room) this.reset(payload?.player); });
       room.onDrop(() => {
         if (this.room !== room) return;
+        this.performance.resetArrivalClock();
         this.publish({ status: 'reconnecting', error: 'Connection lost. Rejoining your reserved slot…' });
         this.reset();
         if (this.reconnectTimer) return;
@@ -132,6 +146,7 @@ export class OnlineConnection {
       room.onReconnect(() => {
         if (this.room !== room) return;
         clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined;
+        this.performance.resetArrivalClock();
         this.publish({ status: 'connected', error: null });
         // The SDK rotates its token after invoking onReconnect, within the same message.
         queueMicrotask(() => { if (this.room === room) this.saveSession(); });
@@ -156,6 +171,8 @@ export class OnlineConnection {
   }
   private readState(room: Room<MatchWire>): void {
     if (this.room !== room || !room.state?.players) return;
+    clearTimeout(this.stateTimer); this.stateTimer = undefined;
+    this.lastStatePublished = performance.now();
     const state = room.state;
     this.publish({ sessionId: room.sessionId, code: state.code || room.roomId, phase: state.phase,
       players: [...state.players.values()].map(playerFromWire).sort((a, b) => a.joinedOrder - b.joinedOrder),
@@ -169,7 +186,7 @@ export class OnlineConnection {
   private reset(player?: MatchPlayer): void { for (const listener of this.resetListeners) listener(player); }
   private publish(patch: Partial<OnlineSnapshot>): void { this.snapshot = { ...this.snapshot, ...patch }; this.notify(); }
   private notify(): void { for (const listener of this.listeners) listener(); }
-  private clearTimers(): void { clearTimeout(this.reconnectTimer); clearInterval(this.heartbeat); this.reconnectTimer = undefined; this.heartbeat = undefined; }
+  private clearTimers(): void { clearTimeout(this.stateTimer); this.stateTimer = undefined; clearTimeout(this.reconnectTimer); clearInterval(this.heartbeat); this.reconnectTimer = undefined; this.heartbeat = undefined; }
   private saveSession(): void {
     if (!this.room) return;
     try { sessionStorage.setItem(SESSION_KEY, JSON.stringify({ endpoint: this.endpoint, token: this.room.reconnectionToken,

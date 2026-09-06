@@ -23,8 +23,8 @@ The server/shared TypeScript build excludes DOM libraries. Browser image types l
 | Setting | Initial value |
 | --- | --- |
 | Simulation and input rate | 60 Hz |
-| State patch rate | 30 Hz |
-| Remote interpolation delay | 100 ms |
+| State patch rate | 45 Hz |
+| Remote interpolation delay | 80 ms |
 | Maximum hitscan rewind | 250 ms |
 | Input queue capacity | 32 frames per player |
 | Server resync threshold | More than 15 queued frames |
@@ -71,3 +71,11 @@ node dist-tools/loadtest.mjs --endpoint https://de-fra-24270fd2.colyseus.cloud -
 It creates one room, drives eight moving/firing guests at 60 Hz, automatically readies/starts/rematches, and counts 900 seconds of gameplay with all eight connected. It leaves its slots on exit and writes an ignored `load-results/*.json` report. Do not run it while a human room occupies the instance. Short `--seconds` runs are smoke tests and never pass the full duration or memory-stability gate.
 
 The report checks rolling p99 simulation work below 16.7 ms, RSS below 750 MB (750,000,000 bytes), sustained queue/schedule backlog, and late-run memory trend. It records the precise stability/backlog criteria and per-client activity. Actual movement must appear in at least 40% of each bot’s alive state samples; mandatory death/respawn waiting time stays visible in total observations but does not count as idle play. This harness does not emulate packet loss: apply latency, jitter and TCP loss to an isolated Linux socket path separately. A successful scripted run still does not validate the real Canada–India player connection; that requires the final human playtest.
+
+## Smoothness and local diagnostics
+
+State patches target 45 Hz while simulation/input remain 60 Hz. The SDK binds the canonical 80 ms interpolation delay to input render-time stamps consumed by `rewind.lastSeenBy`; do not override remote field delays independently. The 250 ms maximum rewind is unchanged. The wire schema is unchanged, and older clients continue supplying their own view timing.
+
+Match admission freezes flat cosmetic recipes. Wire conversion caches normalized appearance per source object/string and serialization per frozen recipe using weak references; mutable recipes still serialize normally. Playing-state React snapshots coalesce to 10 Hz while the canvas reads the live schema. Phase changes publish immediately; score/timer updates may wait up to 100 ms. Spawn-view terrain textures are prepared progressively in the lobby using the existing 128 MiB cache and current display density. Preparation stops when gameplay starts or the runtime is destroyed; distant terrain and later zoom-density changes can still require baking.
+
+Open with `?diagnostics=1` (or append `&diagnostics=1` to an invitation) and inspect `window.__BURNHOP_ONLINE__.snapshot().performance` in browser developer tools. Nothing is uploaded. Arrival interval/jitter (standard deviation) and frame p95/p99 use bounded 300-sample windows. Arrival timing measures decoded state delivery, so browser scheduling can affect it too. Slow frames exceed 33.33 ms and are counted only during active visible play. Spatial correction frequency counts shifts over 0.5 world units after reconciliation and replay at the same input horizon, excluding paused/dead play and input epoch changes. Counters last for the connection. The older top-level `correction` vector is prediction lead over the last authority snapshot, not this correction metric.

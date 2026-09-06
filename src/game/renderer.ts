@@ -163,6 +163,15 @@ export class GameRenderer {
     };
     this.camera = getCameraTarget(this.cameraAnchor, assets.arena, this.zoom);
   }
+  prewarmSpawn(point: Vec2): void {
+    if (!this.outpost) return;
+    const camera = getCameraTarget({ x: point.x + CONFIG.bodyWidth / 2, y: point.y + CONFIG.bodyHeight / 2 }, this.assets.arena, this.zoom);
+    const scale = this.dpr * this.viewportScale * this.zoom;
+    this.ctx.save();
+    this.ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    this.outpost.warm(this.ctx, camera, { x: 1280 / this.zoom, y: 720 / this.zoom });
+    this.ctx.restore();
+  }
   setZoom(level: ZoomLevel): void {
     if (level === this.zoomLevel) return;
     this.zoomLevel = level;

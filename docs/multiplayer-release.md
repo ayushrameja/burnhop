@@ -83,3 +83,9 @@ This shapes only the disposable container's loopback queue: nominal 150 ms RTT, 
 - The real Canada–India human playtest is deferred at the owner's request. Do not describe the release as validated for that real connection until both players complete it.
 
 Host controls follow the longest-connected remaining pilot. Explicit Leave releases a slot immediately; disconnect reserves it for 30 seconds. Disconnected actors remain vulnerable and stay dead until reconnecting. Match state is temporary and is lost on process restart. Schedule maintenance between matches.
+
+## September 6 smoothness update
+
+The state update target is now 45 Hz, simulation/input remain 60 Hz, and remote interpolation is 80 ms. Cosmetics are cached, playing React snapshots coalesce to 10 Hz, and spawn terrain is prepared progressively in the lobby. Local bounded diagnostics report state-arrival jitter, slow frames and actual spatial reconciliation changes (see architecture documentation). No compute plan, region, dependencies or billing settings change.
+
+Pre-deployment validation: 335 unit/shared/backend tests, all builds/typechecks, 89 general Chromium checks (one existing native-capture opt-in skip), and both multiplayer suites passed. The production smoke now verifies diagnostic samples as well as invitations, readiness, start/cancellation, play, refresh recovery and host transfer. The new eight-client Linux impairment run passed its 90-second smoke gate with 1,644 actual dropped packets, a one-second full stall, zero disconnect/errors, maximum rolling p99 work 3.474 ms and peak RSS 76,775,424 bytes. It does not satisfy the full fifteen-minute memory gate. Evidence: ignored `load-results/linux-network-45hz/`. Deployment and full Frankfurt capacity evidence are recorded separately in `load-results/smoothness-release.md`.

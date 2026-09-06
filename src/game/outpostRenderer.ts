@@ -60,6 +60,11 @@ export class OutpostScenery {
     return visible;
   }
 
+  /** Populate the same bounded cache before gameplay without painting the playfield. */
+  warm(ctx: CanvasRenderingContext2D, camera: Vec2, viewport: Vec2): void {
+    this.visibleSurfaces(ctx, camera, viewport);
+  }
+
   background(ctx: CanvasRenderingContext2D, camera: Vec2) {
     const sky = ctx.createLinearGradient(0, 0, 0, 720);
     sky.addColorStop(0, '#a6c1b7'); sky.addColorStop(.6, '#c0cdb5'); sky.addColorStop(1, '#d8d7b6');

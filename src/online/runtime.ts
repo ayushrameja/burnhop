@@ -22,6 +22,7 @@ const REMOTE_FIELDS = ['x', 'y', 'height', 'crouchAmount', 'vx', 'vy'] as const;
 export interface OnlineDiagnostics {
   snapshot: () => { status: ReturnType<OnlineConnection['getSnapshot']>['status']; phase: MatchPhase; running: boolean; paused: boolean;
     local: MatchPlayer | null; authority: MatchPlayer | null; actors: MatchPlayer[]; pending: number; awaitingResync: boolean; replayBufferSize: number;
+    performance: ReturnType<OnlineConnection['performance']['snapshot']>;
     correction: Vec2; aim: { angle: number; mode: AimMode; pointer: Vec2; locked: boolean } };
   toScreen: (x: number, y: number) => Vec2;
 }
@@ -49,6 +50,7 @@ export class OnlineRuntime {
   private disposed = false;
   private running = false;
   private raf = 0;
+  private warmTimer: ReturnType<typeof setTimeout> | undefined;
   private lastTime = 0;
   private lastHudTime = 0;
   private lastPerformanceTime = 0;
@@ -62,11 +64,22 @@ export class OnlineRuntime {
   private unsubscribers: Array<() => void>;
   private mouseGestures = new Set<number>();
   private diagnostic: OnlineDiagnostics;
+  private beforeReconcile: { x: number; y: number; epoch: number } | null = null;
 
   constructor(private canvas: HTMLCanvasElement, private assets: GameAssets, private connection: OnlineConnection,
     private callbacks: RuntimeCallbacks) {
     this.compiled = compileArena(assets.arena);
     this.renderer = new Renderer(canvas, assets);
+    // Spread spawn preparation across lobby idle periods; stop before live gameplay.
+    const spawnQueue = [...(assets.arena.spawnPoints ?? []), assets.arena.playerSpawn];
+    const warmNext = () => {
+      if (this.disposed || this.connection.getSnapshot().phase === 'playing') return;
+      const point = spawnQueue.shift();
+      if (!point) return;
+      this.renderer.prewarmSpawn(point);
+      this.warmTimer = setTimeout(warmNext, 100);
+    };
+    this.warmTimer = setTimeout(warmNext, 0);
     this.diagnostic = {
       snapshot: () => {
         const local = this.controller ? playerFromWire(this.controller.state) : null;
@@ -74,12 +87,13 @@ export class OnlineRuntime {
         return { status: this.connection.getSnapshot().status, phase: this.phase, running: this.running, paused: this.paused,
           local, authority, actors: this.activeRoom?.state?.players ? [...this.activeRoom.state.players.values()].map(playerFromWire) : [],
           pending: this.handle?.pendingCount ?? 0, awaitingResync: this.awaitingResync, replayBufferSize: this.handle?.replayBufferSize ?? 0,
+          performance: this.connection.performance.snapshot(),
           correction: { x: local && authority ? local.x - authority.x : 0, y: local && authority ? local.y - authority.y : 0 },
           aim: { angle: this.aimAngle, mode: this.input.aimMode, pointer: { ...this.pointer }, locked: document.pointerLockElement === this.canvas } };
       },
       toScreen: (x, y) => this.renderer.worldToScreen(x, y),
     };
-    if (import.meta.env.DEV) window.__BURNHOP_ONLINE__ = this.diagnostic;
+    if (import.meta.env.DEV || new URLSearchParams(location.search).has('diagnostics')) window.__BURNHOP_ONLINE__ = this.diagnostic;
     const bounds = this.renderer.getPointerBounds();
     this.pointer = { x: bounds.left + (bounds.right - bounds.left) * 0.65, y: (bounds.top + bounds.bottom) / 2 };
     this.renderer.setPointer(this.pointer.x, this.pointer.y);
@@ -156,6 +170,12 @@ export class OnlineRuntime {
       this.controller?.dispose(); this.localWire = me; this.localLife = me.lifeId; this.localHealth = me.health;
       this.controller = this.predict!.reconciler(me, {
         input: this.handle!, smoothMs: 65, snap: 128,
+        onReconcile: () => {
+          if (this.beforeReconcile && this.controller && this.handle?.epoch === this.beforeReconcile.epoch
+            && !this.paused && this.phase === 'playing' && this.localHealth > 0) {
+            this.connection.performance.reconcile(this.beforeReconcile, this.controller.state);
+          }
+        },
         // Omit fields intentionally: every scalar, including all timers and weapon state, is restored.
         step: (ctx, mirror, command) => {
           if (this.phase !== 'playing') return;
@@ -215,7 +235,10 @@ export class OnlineRuntime {
     try {
       if (this.ensurePrediction()) {
         const connected = this.connection.getSnapshot().status === 'connected';
+        this.beforeReconcile = this.controller && this.handle
+          ? { x: this.controller.state.x, y: this.controller.state.y, epoch: this.handle.epoch } : null;
         const steps = this.predict!.tick(time);
+        this.beforeReconcile = null;
         if (connected && !this.awaitingResync) for (let i = 0; i < steps; i++) this.stageInput();
         const actors: OnlineRenderActor[] = [];
         for (const [id, wire] of this.activeRoom!.state.players) {
@@ -257,6 +280,7 @@ export class OnlineRuntime {
       this.connection.reportError(error instanceof Error ? error.message : 'Online simulation could not start.');
       this.pause(); this.callbacks.onPause(); this.running = false; return;
     }
+    if (!this.paused && !document.hidden) this.connection.performance.frame(elapsed);
     if (elapsed > 0) this.fps = this.fps === null ? 1000 / elapsed : this.fps * 0.92 + (1000 / elapsed) * 0.08;
     if (time - this.lastPerformanceTime > 250) { this.callbacks.onPerformance?.(this.fps); this.lastPerformanceTime = time; }
     this.raf = requestAnimationFrame(this.frame);
@@ -312,7 +336,7 @@ export class OnlineRuntime {
   };
   destroy(): void {
     if (this.disposed) return;
-    this.pause(); this.disposed = true; this.running = false; cancelAnimationFrame(this.raf);
+    this.pause(); this.disposed = true; this.running = false; cancelAnimationFrame(this.raf); clearTimeout(this.warmTimer);
     this.predict?.dispose(); this.resizeObserver.disconnect(); for (const off of this.unsubscribers) off();
     window.removeEventListener('keydown', this.keyDown); window.removeEventListener('keyup', this.keyUp);
     window.removeEventListener('pointermove', this.pointerMove); this.canvas.removeEventListener('mousedown', this.mouseDown);

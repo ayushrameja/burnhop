@@ -60,7 +60,7 @@ export interface HistoricalTarget extends Rect {
 export type TargetHistory = (shooter: MatchPlayer, target: MatchPlayer, input: NetworkInput) => HistoricalTarget | null;
 
 export const MATCH_CONFIG = Object.freeze({
-  tickRate: 60, stateRate: 30, interpolationDelayMs: 100, maxRewindMs: 250,
+  tickRate: 60, stateRate: 45, interpolationDelayMs: 80, maxRewindMs: 250,
   maxPlayers: 8, minPlayers: 2, countdownTicks: 180, durationTicks: 5 * 60 * 60,
   respawnTicks: 120, protectionTicks: 60, reconnectSeconds: 30, idleLobbySeconds: 600,
 });

@@ -72,6 +72,18 @@ function setup(terrain = [polygon('visible', 100, 100), polygon('distant', 2100,
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Outpost scenery bitmap lifecycle', () => {
+  it('prepares spawn textures without drawing and reuses them on the first game frame', () => {
+    const { scene, ctx, bitmaps, drawImage } = setup();
+    ctx.setTransform(3, 0, 0, 3, 0, 0);
+    scene.warm(ctx, { x: 0, y: 0 }, { x: 600, y: 400 });
+    expect(bitmaps).toHaveLength(1);
+    expect(drawImage).not.toHaveBeenCalled();
+    scene.draw(ctx, { x: 0, y: 0 }, { x: 600, y: 400 });
+    expect(bitmaps).toHaveLength(1);
+    expect(drawImage.mock.calls[0][0]).toBe(bitmaps[0]);
+    scene.destroy();
+    expect(bitmaps[0].width).toBe(0);
+  });
   it('bakes only visible islands and reuses their bitmaps across stationary frames', () => {
     const { scene, ctx, bitmaps, drawImage } = setup();
     expect(bitmaps).toHaveLength(0);

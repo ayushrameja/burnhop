@@ -3,7 +3,7 @@ import { installCapture, enterFullscreen } from './helpers/capture';
 
 async function openOnline(page: Page, name: string, code = '') {
   await installCapture(page);
-  await page.goto(`/?online=1${code ? `&room=${code}` : ''}`);
+  await page.goto(`/?online=1&diagnostics=1${code ? `&room=${code}` : ''}`);
   await enterFullscreen(page);
   await page.getByRole('textbox', { name: 'Nickname', exact: true }).fill(name);
 }
@@ -62,6 +62,11 @@ test('private invitations, readiness, match capture, locked joins, refresh and h
     await host.keyboard.down('KeyD');
     await host.waitForTimeout(600);
     await host.keyboard.up('KeyD');
+    const diagnostics = await host.evaluate(() => window.__BURNHOP_ONLINE__!.snapshot().performance);
+    expect(diagnostics.arrivalSamples).toBeGreaterThan(0);
+    expect(diagnostics.measuredFrames).toBeGreaterThan(0);
+    expect(diagnostics.reconciliations).toBeGreaterThan(0);
+    await testInfo.attach('local-performance', { body: JSON.stringify(diagnostics, null, 2), contentType: 'application/json' });
     await host.screenshot({ path: testInfo.outputPath('online-play.png') });
     await host.evaluate(() => window.dispatchEvent(new Event('blur')));
     await expect(host.getByRole('heading', { name: 'MATCH CONTINUES', exact: true })).toBeVisible();

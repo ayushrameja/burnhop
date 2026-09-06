@@ -28,6 +28,28 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe('online session lifecycle', () => {
+  it('coalesces playing snapshots while publishing phase changes immediately and cancelling stale timers', async () => {
+    const room = fakeRoom(); sdk.create.mockResolvedValue(room);
+    const connection = new OnlineConnection({ endpoint: 'ws://localhost:2567' });
+    await connection.create('Pilot', DEFAULT_APPEARANCE);
+    room.state.phase = 'playing'; room.onStateChange.invoke(room.state);
+    const listener = vi.fn(); connection.subscribe(listener);
+    for (let i = 1; i <= 4; i++) {
+      await vi.advanceTimersByTimeAsync(22); room.state.tick = i; room.onStateChange.invoke(room.state);
+    }
+    expect(listener).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(12);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(connection.getSnapshot().tick).toBe(4);
+    room.state.phase = 'results'; room.onStateChange.invoke(room.state);
+    expect(connection.getSnapshot().phase).toBe('results');
+    room.state.phase = 'playing'; room.onStateChange.invoke(room.state);
+    room.onStateChange.invoke(room.state);
+    await connection.leave();
+    await vi.advanceTimersByTimeAsync(150);
+    expect(connection.getSnapshot().status).toBe('idle');
+    connection.dispose();
+  });
   it('keeps practice available without inventing a backend endpoint', async () => {
     const connection = new OnlineConnection();
     await connection.create('Pilot', DEFAULT_APPEARANCE);

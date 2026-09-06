@@ -1,5 +1,5 @@
 import { schema, t, type SchemaType } from '@colyseus/schema';
-import { normalizeAppearance } from '../game/appearance';
+import { normalizeAppearance, type DetailedAppearance } from '../game/appearance';
 import type { MatchPlayer, MatchState } from './model';
 
 /** Input is flat and identically ordered in both bundles; the socket supplies identity. */
@@ -55,9 +55,29 @@ export const MatchWire = schema({
 }, 'BurnhopMatch');
 export type MatchWire = SchemaType<typeof MatchWire>;
 
+// Match cosmetics are immutable. Weak keys release cached recipes with their actors.
+const encodedAppearances = new WeakMap<DetailedAppearance, string>();
+const decodedAppearances = new WeakMap<object, { source: string; value: DetailedAppearance }>();
+function encodeAppearance(value: DetailedAppearance): string {
+  if (!Object.isFrozen(value)) return JSON.stringify(value);
+  let encoded = encodedAppearances.get(value);
+  if (encoded === undefined) { encoded = JSON.stringify(value); encodedAppearances.set(value, encoded); }
+  return encoded;
+}
+function decodeAppearance(wire: PlayerWire): DetailedAppearance {
+  const cached = decodedAppearances.get(wire);
+  if (cached?.source === wire.appearance) return cached.value;
+  let value: DetailedAppearance;
+  try { value = normalizeAppearance(JSON.parse(wire.appearance)); }
+  catch { value = normalizeAppearance(undefined); }
+  Object.freeze(value);
+  decodedAppearances.set(wire, { source: wire.appearance, value });
+  return value;
+}
+
 export function syncPlayerWire(wire: PlayerWire, player: MatchPlayer): void {
   for (const key of PLAYER_FIELDS) wire[key] = player[key] as never;
-  wire.appearance = JSON.stringify(player.appearance);
+  wire.appearance = encodeAppearance(player.appearance);
   wire.ammo = player.weapon.ammo;
   wire.reloadTicks = player.weapon.reloadTicks;
   wire.cooldownTicks = player.weapon.cooldownTicks;
@@ -66,8 +86,7 @@ export function syncPlayerWire(wire: PlayerWire, player: MatchPlayer): void {
 export function playerFromWire(wire: PlayerWire): MatchPlayer {
   const player = {} as MatchPlayer;
   for (const key of PLAYER_FIELDS) player[key] = wire[key] as never;
-  try { player.appearance = normalizeAppearance(JSON.parse(wire.appearance)); }
-  catch { player.appearance = normalizeAppearance(undefined); }
+  player.appearance = decodeAppearance(wire);
   player.weapon = { ammo: wire.ammo, reloadTicks: wire.reloadTicks, cooldownTicks: wire.cooldownTicks };
   return player;
 }
