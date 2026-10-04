@@ -1,6 +1,10 @@
 # Multiplayer development and release
 
-The browser remains at https://burnhop.lowhp.studio/ on Vercel. The game server uses the existing Frankfurt Colyseus application **1879**, endpoint **https://de-fra-24270fd2.colyseus.cloud**. One PM2 fork, one unlisted room, up to eight players. This release needs no database, account service, Redis instance, or additional paid resources.
+**Current status — October 4, 2026:** Production is single-player practice only. Multiplayer is temporarily disabled. It will be re-added later using a server hosted in **India only**; no replacement provider or return date has been selected. Do not restore the Frankfurt endpoint for production multiplayer.
+
+The Colyseus subscription renewal was canceled, with service ending October 5, 2026. Vercel's production `VITE_COLYSEUS_URL` was renamed to `PAUSED_COLYSEUS_URL` and the website redeployed, disabling multiplayer create/join while retaining solo practice. Before re-enabling multiplayer, provision and verify an India-hosted server, set `VITE_COLYSEUS_URL` to its verified endpoint, and complete the release gates below.
+
+The browser remains at https://burnhop.lowhp.studio/ on Vercel. **Historical hosting reference:** the previous game server used Frankfurt Colyseus application **1879**, endpoint **https://de-fra-24270fd2.colyseus.cloud**. One PM2 fork, one unlisted room, up to eight players. That release needed no database, account service, Redis instance, or additional paid resources. The Frankfurt settings and release evidence below are retained for reference, not as the future hosting target.
 
 ## Local development
 

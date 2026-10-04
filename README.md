@@ -2,6 +2,8 @@
 
 A shooting range and eight-player Outpost free-for-all with jet boots. Made with TypeScript, React, Vite, Canvas 2D and an authoritative Colyseus server. The browser game stays on Vercel.
 
+**Current status — October 4, 2026:** The live game is single-player practice only. Multiplayer is temporarily disabled and will be re-added later using a server hosted in **India only**. No replacement provider or return date has been selected. The multiplayer documentation below describes the retained implementation, not current live availability.
+
 ## Run it
 
 Use Node **22.18 or later within 22.x** and pnpm **11.3.0** (the exact tested dependency versions are pinned). Run `nvm use` first.
